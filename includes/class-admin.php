@@ -488,6 +488,8 @@ class FCRM_WP_Sync_Admin {
                 <span id="fcrm-scan-status" style="margin-left:12px"></span>
             </div>
 
+            <div id="fcrm-resolve-notice" class="fcrm-notice" style="display:none; margin-top:12px"></div>
+
             <div id="fcrm-mismatches-container" style="margin-top:20px">
                 <p class="fcrm-placeholder"><?php esc_html_e( 'Click "Scan for Mismatches" to begin.', 'fcrm-wp-sync' ); ?></p>
             </div>
@@ -676,17 +678,21 @@ class FCRM_WP_Sync_Admin {
         $scope      = sanitize_text_field( $_POST['scope']      ?? 'field' );           // phpcs:ignore
 
         if ( ! $user_id ) {
-            wp_send_json_error( 'Invalid user_id' );
+            wp_send_json_error( [ 'message' => 'Invalid user ID.' ] );
         }
 
-        $ok = ( $scope === 'all' )
-            ? $this->detector->resolve_user( $user_id, $direction )
-            : $this->detector->resolve_field( $user_id, $mapping_id, $direction );
+        try {
+            $ok = ( $scope === 'all' )
+                ? $this->detector->resolve_user( $user_id, $direction )
+                : $this->detector->resolve_field( $user_id, $mapping_id, $direction );
+        } catch ( \Throwable $e ) {
+            wp_send_json_error( [ 'message' => $e->getMessage() ] );
+        }
 
         if ( $ok ) {
             wp_send_json_success();
         } else {
-            wp_send_json_error( 'Resolution failed' );
+            wp_send_json_error( [ 'message' => 'Could not resolve: no linked FluentCRM subscriber found for this user.' ] );
         }
     }
 

@@ -53,23 +53,17 @@ class FCRM_WP_Sync_Mismatch_Detector {
      * @param int $per_page
      * @return array{items: array, total: int, pages: int}
      */
-    public function get_mismatches( int $page = 1, int $per_page = 25 ): array {
+    public function get_mismatches( int $page = 1, int $per_page = 10 ): array {
         $mappings = $this->mapper->get_active_mappings();
         if ( empty( $mappings ) ) {
             return [ 'items' => [], 'total' => 0, 'pages' => 0 ];
         }
 
-        // Fetch WP users that have a linked FCRM subscriber (via meta or email lookup)
-        $offset = ( max( 1, $page ) - 1 ) * $per_page;
-        $users  = get_users( [
-            'number'  => $per_page,
-            'offset'  => $offset,
-            'orderby' => 'ID',
-            'order'   => 'ASC',
-            'fields'  => 'all',
-        ] );
-
-        $items = [];
+        // Scan ALL users so that pagination is over mismatch *results*, not over
+        // raw user rows.  Without this, a page of 20 users that happen to all be
+        // in-sync would return 0 items even though later users have mismatches.
+        $users     = get_users( [ 'fields' => 'all', 'number' => -1, 'orderby' => 'ID', 'order' => 'ASC' ] );
+        $all_items = [];
 
         foreach ( $users as $wp_user ) {
             $subscriber = $this->find_subscriber_for_user( $wp_user );
@@ -80,7 +74,7 @@ class FCRM_WP_Sync_Mismatch_Detector {
             $field_mismatches = $this->compare_fields( $wp_user->ID, $wp_user, $subscriber, $mappings );
 
             if ( ! empty( $field_mismatches ) ) {
-                $items[] = [
+                $all_items[] = [
                     'user_id'       => $wp_user->ID,
                     'user_email'    => $wp_user->user_email,
                     'user_display'  => $wp_user->display_name,
@@ -90,13 +84,14 @@ class FCRM_WP_Sync_Mismatch_Detector {
             }
         }
 
-        // Total count (lazy: scan all users — fine for sites up to a few thousand)
-        $total = $this->count_mismatches_total( $mappings );
+        $total  = count( $all_items );
+        $pages  = $total > 0 ? (int) ceil( $total / $per_page ) : 0;
+        $offset = ( max( 1, $page ) - 1 ) * $per_page;
 
         return [
-            'items' => $items,
+            'items' => array_slice( $all_items, $offset, $per_page ),
             'total' => $total,
-            'pages' => (int) ceil( $total / $per_page ),
+            'pages' => $pages,
         ];
     }
 

@@ -263,6 +263,7 @@
     var mismatchPage = 1;
     var mismatchTotal = 0;
     var mismatchPages = 0;
+    var $resolveNotice = $('#fcrm-resolve-notice');
 
     $('#fcrm-scan-mismatches').on('click', function () {
         mismatchPage = 1;
@@ -284,9 +285,11 @@
     });
 
     function loadMismatches() {
-        var $container = $('#fcrm-mismatches-container');
-        var $status    = $('#fcrm-scan-status');
+        var $container  = $('#fcrm-mismatches-container');
+        var $status     = $('#fcrm-scan-status');
         var $pagination = $('#fcrm-mismatch-pagination');
+
+        $resolveNotice.hide();
 
         $container.html('<p>' + i18n.loading + '</p>');
         $status.text(i18n.loading);
@@ -295,7 +298,7 @@
             action:   'fcrm_wp_sync_get_mismatches',
             nonce:    nonce,
             page:     mismatchPage,
-            per_page: 20,
+            per_page: 10,
         })
         .done(function (resp) {
             if (!resp.success) {
@@ -397,12 +400,13 @@
                 );
             } else {
                 $btn.prop('disabled', false).text(direction === 'use_wp' ? 'Use WP' : 'Use FCRM');
-                alert(i18n.error);
+                var msg = (resp.data && resp.data.message) ? resp.data.message : i18n.error;
+                showNotice($resolveNotice, msg, 'error');
             }
         })
         .fail(function () {
             $btn.prop('disabled', false).text(direction === 'use_wp' ? 'Use WP' : 'Use FCRM');
-            alert(i18n.error);
+            showNotice($resolveNotice, i18n.error, 'error');
         });
     }
 
@@ -425,17 +429,20 @@
             if (resp.success) {
                 $record.find('tr').addClass('fcrm-resolved');
                 $record.find('.fcrm-resolve-btn, .fcrm-resolve-all-btn').prop('disabled', true);
-                $record.find('td:last-child').html(
-                    '<span class="fcrm-resolved-badge">' + i18n.resolved + '</span>'
-                );
+                $record.find('tbody tr').each(function () {
+                    $(this).find('td:last-child').html(
+                        '<span class="fcrm-resolved-badge">' + i18n.resolved + '</span>'
+                    );
+                });
             } else {
                 $btn.prop('disabled', false).text(direction === 'use_wp' ? 'Use all WP' : 'Use all FCRM');
-                alert(i18n.error);
+                var msg = (resp.data && resp.data.message) ? resp.data.message : i18n.error;
+                showNotice($resolveNotice, msg, 'error');
             }
         })
         .fail(function () {
             $btn.prop('disabled', false).text(direction === 'use_wp' ? 'Use all WP' : 'Use all FCRM');
-            alert(i18n.error);
+            showNotice($resolveNotice, i18n.error, 'error');
         });
     }
 
