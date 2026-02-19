@@ -1,14 +1,17 @@
 <?php
 /**
- * Plugin Name:  FluentCRM WordPress Sync
- * Plugin URI:   https://github.com/iapsnj/fluentcrm-wp-sync
- * Description:  Bidirectional sync between FluentCRM contacts and WordPress users with configurable field mapping, ACF support, and mismatch resolution.
- * Version:      1.0.0
+ * Plugin Name:       FluentCRM WordPress Sync
+ * Plugin URI:        https://github.com/S-FX-com/WP-FluentCRM-Sync
+ * Description:       Bidirectional sync between FluentCRM contacts and WordPress users with configurable field mapping, ACF support, and mismatch resolution.
+ * Version:           1.0.0
  * Requires at least: 5.8
- * Requires PHP: 7.4
- * Author:       IAPSNJ
- * License:      GPL-2.0+
- * Text Domain:  fcrm-wp-sync
+ * Requires PHP:      7.4
+ * Requires Plugins:  fluent-crm
+ * Author:            S-FX
+ * License:           GPL-2.0+
+ * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
+ * Text Domain:       fcrm-wp-sync
+ * Domain Path:       /languages
  */
 
 defined( 'ABSPATH' ) || exit;
