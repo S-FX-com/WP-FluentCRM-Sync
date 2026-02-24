@@ -148,6 +148,18 @@ class FCRM_WP_Sync_Github_Updater {
 				'requires'    => '5.8',
 				'tested'      => '6.7',
 			];
+		} else {
+			// Tell WordPress this plugin was checked and is up to date so it
+			// doesn't show a stale "update available" indicator.
+			$transient->no_update[ $this->plugin_slug ] = (object) [
+				'slug'        => dirname( $this->plugin_slug ),
+				'plugin'      => $this->plugin_slug,
+				'new_version' => $this->current_version,
+				'url'         => esc_url( 'https://github.com/' . self::GITHUB_USER . '/' . self::GITHUB_REPO ),
+				'package'     => '',
+				'requires'    => '5.8',
+				'tested'      => '6.7',
+			];
 		}
 
 		return $transient;
@@ -350,10 +362,13 @@ class FCRM_WP_Sync_Github_Updater {
 				break;
 
 			case 'up_to_date':
+				$release        = $this->get_release_data();
+				$github_version = $release ? $this->tag_to_version( $release['tag_name'] ) : $this->current_version;
 				$message = sprintf(
-					/* translators: %s: current version number */
-					esc_html__( 'FluentCRM WP Sync: you are running the latest version (%s).', 'fcrm-wp-sync' ),
-					esc_html( $this->current_version )
+					/* translators: 1: installed version, 2: latest GitHub release version */
+					esc_html__( 'FluentCRM WP Sync: installed %1$s — latest GitHub release is %2$s. No update needed.', 'fcrm-wp-sync' ),
+					esc_html( $this->current_version ),
+					esc_html( $github_version )
 				);
 				$class = 'notice-success';
 				break;
