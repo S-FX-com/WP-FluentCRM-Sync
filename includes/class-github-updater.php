@@ -46,6 +46,9 @@ class FCRM_WP_Sync_Github_Updater {
 		add_filter( 'pre_set_site_transient_update_plugins', [ $this, 'check_for_update' ] );
 		add_filter( 'plugins_api',                           [ $this, 'plugin_info' ], 10, 3 );
 		add_filter( 'upgrader_post_install',                 [ $this, 'post_install' ], 10, 3 );
+		add_filter( 'plugin_action_links_' . plugin_basename( FCRM_WP_SYNC_FILE ), [ $this, 'action_links' ] );
+		add_action( 'admin_init',                            [ $this, 'handle_manual_check' ] );
+		add_action( 'admin_notices',                         [ $this, 'show_check_notice' ] );
 	}
 
 	// -------------------------------------------------------------------------
@@ -225,6 +228,128 @@ class FCRM_WP_Sync_Github_Updater {
 		}
 
 		return $result;
+	}
+
+	// -------------------------------------------------------------------------
+	// Plugins-page "Check for Updates" link
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Append a "Check for Updates" action link to this plugin's row on
+	 * wp-admin/plugins.php.
+	 *
+	 * Hooked to: plugin_action_links_{slug}
+	 *
+	 * @param string[] $links Existing action links.
+	 * @return string[] Modified links.
+	 */
+	public function action_links( array $links ): array {
+		$url = wp_nonce_url(
+			add_query_arg( 'fcrm_check_update', '1', self_admin_url( 'plugins.php' ) ),
+			'fcrm_check_update'
+		);
+
+		$links[] = '<a href="' . esc_url( $url ) . '">'
+			. esc_html__( 'Check for Updates', 'fcrm-wp-sync' )
+			. '</a>';
+
+		return $links;
+	}
+
+	/**
+	 * Process the manual update-check request.
+	 *
+	 * Flushes the cached release data and the WordPress update_plugins
+	 * transient so that WordPress performs a fresh check immediately.
+	 * Redirects back to plugins.php with a result query arg so the
+	 * admin notice can be shown.
+	 *
+	 * Hooked to: admin_init
+	 */
+	public function handle_manual_check(): void {
+		if ( empty( $_GET['fcrm_check_update'] ) ) { // phpcs:ignore
+			return;
+		}
+
+		check_admin_referer( 'fcrm_check_update' );
+
+		if ( ! current_user_can( 'update_plugins' ) ) {
+			wp_die( esc_html__( 'You do not have permission to do that.', 'fcrm-wp-sync' ) );
+		}
+
+		// Bust the cached release data so get_release_data() hits GitHub fresh.
+		self::flush_cache();
+
+		// Also delete WordPress's own update_plugins transient so it re-runs
+		// check_for_update() immediately on the next page load.
+		delete_site_transient( 'update_plugins' );
+
+		// Fetch the latest release now so the result is ready for the notice.
+		$release = $this->get_release_data();
+		$result  = 'fail';
+
+		if ( $release ) {
+			$remote = $this->tag_to_version( $release['tag_name'] );
+			if ( version_compare( $remote, $this->current_version, '>' ) ) {
+				$result = 'update_available';
+			} else {
+				$result = 'up_to_date';
+			}
+		}
+
+		wp_safe_redirect(
+			add_query_arg(
+				[ 'fcrm_update_result' => $result ],
+				self_admin_url( 'plugins.php' )
+			)
+		);
+		exit;
+	}
+
+	/**
+	 * Display an admin notice after a manual update check.
+	 *
+	 * Hooked to: admin_notices
+	 */
+	public function show_check_notice(): void {
+		if ( empty( $_GET['fcrm_update_result'] ) ) { // phpcs:ignore
+			return;
+		}
+
+		$result = sanitize_key( $_GET['fcrm_update_result'] ); // phpcs:ignore
+
+		switch ( $result ) {
+			case 'update_available':
+				$release = $this->get_release_data();
+				$version = $release ? $this->tag_to_version( $release['tag_name'] ) : '';
+				$message = sprintf(
+					/* translators: %s: new version number */
+					esc_html__( 'FluentCRM WP Sync: version %s is available. Use the "Update now" link to install it.', 'fcrm-wp-sync' ),
+					esc_html( $version )
+				);
+				$class = 'notice-warning';
+				break;
+
+			case 'up_to_date':
+				$message = sprintf(
+					/* translators: %s: current version number */
+					esc_html__( 'FluentCRM WP Sync: you are running the latest version (%s).', 'fcrm-wp-sync' ),
+					esc_html( $this->current_version )
+				);
+				$class = 'notice-success';
+				break;
+
+			default:
+				$message = esc_html__( 'FluentCRM WP Sync: could not reach GitHub to check for updates. Please try again later.', 'fcrm-wp-sync' );
+				$class   = 'notice-error';
+				break;
+		}
+
+		printf(
+			'<div class="notice %s is-dismissible"><p>%s</p></div>',
+			esc_attr( $class ),
+			$message
+		);
 	}
 
 	// -------------------------------------------------------------------------
