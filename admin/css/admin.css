@@ -131,6 +131,16 @@
 .fcrm-date-format-wrap input {
     width: 80px;
 }
+/* Field hint text (source + type label shown beneath each dropdown) ------- */
+.fcrm-field-hint {
+    margin: 4px 0 0;
+    font-size: 11px;
+    color: #787c82;
+    font-style: italic;
+    line-height: 1.4;
+    min-height: 1.4em; /* reserve space so rows don't jump when hint appears */
+}
+
 .fcrm-row-error td {
     background: #fff0f0 !important;
 }

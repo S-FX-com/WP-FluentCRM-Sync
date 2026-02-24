@@ -172,22 +172,39 @@ class FCRM_WP_Sync_Admin {
         $fcrm_fields = $this->mapper->get_fcrm_fields();
         $mappings    = $this->mapper->get_saved_mappings();
 
-        // Sort for display
-        uasort( $wp_fields,   fn( $a, $b ) => strcmp( $a['label'], $b['label'] ) );
-        uasort( $fcrm_fields, fn( $a, $b ) => strcmp( $a['label'], $b['label'] ) );
+        // Sort WP fields for display; keep FCRM fields in natural FluentCRM order
+        // (default fields first, then custom), sorted by label within each group.
+        uasort( $wp_fields, fn( $a, $b ) => strcmp( $a['label'], $b['label'] ) );
+
+        // Stable sort: default fields before custom, then alphabetical within each group.
+        uasort( $fcrm_fields, function ( $a, $b ) {
+            $ga = $a['source'] === 'default' ? 0 : 1;
+            $gb = $b['source'] === 'default' ? 0 : 1;
+            if ( $ga !== $gb ) {
+                return $ga - $gb;
+            }
+            return strcmp( $a['label'], $b['label'] );
+        } );
+
+        // Index saved mappings by fcrm uid so we can pre-fill rows.
+        $saved_by_fcrm = [];
+        foreach ( $mappings as $m ) {
+            $uid = ( $m['fcrm_field_source'] ?? '' ) . '__' . ( $m['fcrm_field_key'] ?? '' );
+            $saved_by_fcrm[ $uid ][] = $m;
+        }
 
         ?>
         <div class="wrap fcrm-sync-wrap">
             <h1><?php esc_html_e( 'FluentCRM WP Sync – Field Mapping', 'fcrm-wp-sync' ); ?></h1>
             <p class="description">
-                <?php esc_html_e( 'Map WordPress user fields to FluentCRM contact fields. Both sides are discovered automatically (including ACF and FluentCRM custom fields).', 'fcrm-wp-sync' ); ?>
+                <?php esc_html_e( 'Every FluentCRM field is listed below. Choose a WordPress field to map it to, or leave "— Don\'t map —" to skip. Field Type is set automatically from the FluentCRM field. Use "+ Add Row" for extra custom pairings.', 'fcrm-wp-sync' ); ?>
             </p>
 
             <div id="fcrm-mapping-notice" class="fcrm-notice" style="display:none"></div>
 
             <div class="fcrm-mapping-toolbar">
                 <button id="fcrm-add-row" class="button button-secondary">
-                    + <?php esc_html_e( 'Add Mapping Row', 'fcrm-wp-sync' ); ?>
+                    + <?php esc_html_e( 'Add Row', 'fcrm-wp-sync' ); ?>
                 </button>
                 <button id="fcrm-save-mappings" class="button button-primary">
                     <?php esc_html_e( 'Save Mappings', 'fcrm-wp-sync' ); ?>
@@ -198,8 +215,8 @@ class FCRM_WP_Sync_Admin {
                 <table class="widefat fcrm-mapping-table" id="fcrm-mapping-table">
                     <thead>
                         <tr>
-                            <th><?php esc_html_e( 'WordPress Field', 'fcrm-wp-sync' ); ?></th>
                             <th><?php esc_html_e( 'FluentCRM Field', 'fcrm-wp-sync' ); ?></th>
+                            <th><?php esc_html_e( 'WordPress Field', 'fcrm-wp-sync' ); ?></th>
                             <th><?php esc_html_e( 'Field Type', 'fcrm-wp-sync' ); ?></th>
                             <th><?php esc_html_e( 'Sync Direction', 'fcrm-wp-sync' ); ?></th>
                             <th><?php esc_html_e( 'Enabled', 'fcrm-wp-sync' ); ?></th>
@@ -207,19 +224,46 @@ class FCRM_WP_Sync_Admin {
                         </tr>
                     </thead>
                     <tbody id="fcrm-mapping-rows">
-                        <?php foreach ( $mappings as $mapping ) : ?>
-                            <?php $this->render_mapping_row( $mapping, $wp_fields, $fcrm_fields ); ?>
-                        <?php endforeach; ?>
-                        <?php if ( empty( $mappings ) ) : ?>
-                            <tr class="fcrm-empty-row">
-                                <td colspan="6"><?php esc_html_e( 'No mappings yet. Click "Add Mapping Row" to begin.', 'fcrm-wp-sync' ); ?></td>
-                            </tr>
-                        <?php endif; ?>
+                        <?php
+                        $rendered_fcrm_uids = [];
+
+                        // One row per FluentCRM field, pre-filled with any saved WP mapping.
+                        foreach ( $fcrm_fields as $uid => $fcrm_field ) {
+                            $rendered_fcrm_uids[] = $uid;
+                            if ( isset( $saved_by_fcrm[ $uid ] ) ) {
+                                foreach ( $saved_by_fcrm[ $uid ] as $m ) {
+                                    $this->render_mapping_row( $m, $wp_fields, $fcrm_fields );
+                                }
+                            } else {
+                                // Synthetic mapping: FCRM side pre-set, WP side blank.
+                                $this->render_mapping_row(
+                                    [
+                                        'fcrm_field_key'    => $fcrm_field['key'],
+                                        'fcrm_field_source' => $fcrm_field['source'],
+                                        'fcrm_field_label'  => $fcrm_field['label'],
+                                        'field_type'        => $fcrm_field['type'],
+                                        'sync_direction'    => 'both',
+                                        'enabled'           => false,
+                                    ],
+                                    $wp_fields,
+                                    $fcrm_fields
+                                );
+                            }
+                        }
+
+                        // Orphaned saved mappings whose FCRM field no longer exists.
+                        foreach ( $mappings as $m ) {
+                            $fcrm_uid = ( $m['fcrm_field_source'] ?? '' ) . '__' . ( $m['fcrm_field_key'] ?? '' );
+                            if ( ! in_array( $fcrm_uid, $rendered_fcrm_uids, true ) ) {
+                                $this->render_mapping_row( $m, $wp_fields, $fcrm_fields );
+                            }
+                        }
+                        ?>
                     </tbody>
                 </table>
             </div>
 
-            <!-- Hidden row template (cloned by JS) -->
+            <!-- Hidden row template (cloned by JS for "+ Add Row") -->
             <template id="fcrm-row-template">
                 <?php $this->render_mapping_row( [], $wp_fields, $fcrm_fields, true ); ?>
             </template>
@@ -261,6 +305,8 @@ class FCRM_WP_Sync_Admin {
 
     /**
      * Render a single mapping table row (or a blank template row).
+     *
+     * Column order: FluentCRM Field | WordPress Field | Field Type | Direction | Enabled | Remove
      */
     private function render_mapping_row( array $mapping, array $wp_fields, array $fcrm_fields, bool $is_template = false ): void {
         $id           = $mapping['id']                 ?? '';
@@ -271,60 +317,141 @@ class FCRM_WP_Sync_Admin {
         $field_type   = $mapping['field_type']         ?? 'text';
         $direction    = $mapping['sync_direction']     ?? 'both';
         $enabled      = ! empty( $mapping['enabled'] );
-        $wp_label     = $mapping['wp_field_label']     ?? '';
-        $fcrm_label   = $mapping['fcrm_field_label']   ?? '';
         $date_fmt_wp  = $mapping['date_format_wp']     ?? 'm/d/Y';
         $value_map    = $mapping['value_map']          ?? [];
 
         $row_id = $is_template ? '__TEMPLATE__' : ( $id ?: FCRM_WP_Sync_Field_Mapper::generate_id() );
 
+        // Human-readable labels used for hint text beneath each dropdown.
+        $wp_source_labels = [
+            'user' => 'WordPress User',
+            'meta' => 'User Meta',
+            'acf'  => 'ACF',
+            'pmp'  => 'Paid Memberships Pro',
+        ];
+        $acf_type_labels  = [
+            'date_picker'      => 'Date Picker',
+            'date_time_picker' => 'Date & Time',
+            'time_picker'      => 'Time Picker',
+            'checkbox'         => 'Checkbox',
+            'radio'            => 'Radio Button',
+            'select'           => 'Dropdown',
+            'number'           => 'Number',
+            'email'            => 'Email',
+            'textarea'         => 'Textarea',
+            'wysiwyg'          => 'Rich Text',
+            'url'              => 'URL',
+            'text'             => 'Text',
+        ];
+        $sync_type_labels = [
+            'text'     => 'Text',
+            'email'    => 'Email',
+            'date'     => 'Date',
+            'number'   => 'Number',
+            'select'   => 'Dropdown',
+            'checkbox' => 'Checkbox',
+            'textarea' => 'Textarea',
+        ];
+
+        // Helper: type-label string for a WP field entry.
+        $wp_type_label = function ( array $f ) use ( $acf_type_labels, $sync_type_labels ): string {
+            if ( $f['source'] === 'acf' && ! empty( $f['acf_field_type'] ) ) {
+                return $acf_type_labels[ $f['acf_field_type'] ] ?? ucfirst( str_replace( '_', ' ', $f['acf_field_type'] ) );
+            }
+            return $sync_type_labels[ $f['type'] ] ?? ucfirst( $f['type'] );
+        };
+
+        // Helper: type-label string for a FCRM field entry.
+        $fcrm_type_label = function ( array $f ) use ( $sync_type_labels ): string {
+            return $sync_type_labels[ $f['type'] ] ?? ucfirst( $f['type'] );
+        };
+
         echo '<tr class="fcrm-mapping-row" data-id="' . esc_attr( $row_id ) . '">';
 
-        // --- WP Field ---
+        // --- Column 1: FluentCRM Field ---
+        // Compute the initial hint text (JS will keep it live on change).
+        $selected_fcrm_uid = $fcrm_src . '__' . $fcrm_key;
+        $sel_fcrm_f        = $fcrm_fields[ $selected_fcrm_uid ] ?? null;
+        $fcrm_hint_text    = '';
+        if ( $sel_fcrm_f ) {
+            $src_lbl        = $sel_fcrm_f['source'] === 'custom' ? 'FluentCRM Custom' : 'FluentCRM';
+            $fcrm_hint_text = $src_lbl . ': ' . $fcrm_type_label( $sel_fcrm_f );
+        }
+
+        echo '<td>';
+        echo '<select class="fcrm-fcrm-field" name="mappings[' . esc_attr( $row_id ) . '][fcrm_uid]">';
+        echo '<option value="">' . esc_html__( '— Select FluentCRM field —', 'fcrm-wp-sync' ) . '</option>';
+        foreach ( $fcrm_fields as $uid => $f ) {
+            $selected     = ( $f['key'] === $fcrm_key && $f['source'] === $fcrm_src ) ? ' selected' : '';
+            $options_json = wp_json_encode( $f['options'] ?? [] );
+            $src_lbl      = $f['source'] === 'custom' ? 'FluentCRM Custom' : 'FluentCRM';
+            $t_lbl        = $fcrm_type_label( $f );
+            printf(
+                '<option value="%s" data-type="%s" data-label="%s" data-options="%s" data-source-label="%s" data-type-label="%s"%s>%s</option>',
+                esc_attr( $uid ),
+                esc_attr( $f['type'] ),
+                esc_attr( $f['label'] ),
+                esc_attr( $options_json ),
+                esc_attr( $src_lbl ),
+                esc_attr( $t_lbl ),
+                $selected,
+                esc_html( $f['label'] )
+            );
+        }
+        echo '</select>';
+        echo '<p class="fcrm-field-hint fcrm-fcrm-hint">' . esc_html( $fcrm_hint_text ) . '</p>';
+        echo '</td>';
+
+        // --- Column 2: WordPress Field ---
+        // Find the currently selected WP field for hint text + readonly detection.
+        $wp_uid_selected = '';
+        foreach ( $wp_fields as $uid => $f ) {
+            if ( $f['key'] === $wp_key && $f['source'] === $wp_src ) {
+                $wp_uid_selected = $uid;
+                break;
+            }
+        }
+        $sel_wp_f     = $wp_fields[ $wp_uid_selected ] ?? null;
+        $wp_hint_text = '';
+        if ( $sel_wp_f ) {
+            $src_lbl      = $wp_source_labels[ $sel_wp_f['source'] ] ?? $sel_wp_f['source'];
+            $wp_hint_text = $src_lbl . ': ' . $wp_type_label( $sel_wp_f );
+        }
+
+        $dir_is_locked = $sel_wp_f && ! empty( $sel_wp_f['readonly'] );
+        if ( $dir_is_locked ) {
+            $direction = 'wp_to_fcrm';
+        }
+
         echo '<td>';
         echo '<select class="fcrm-wp-field" name="mappings[' . esc_attr( $row_id ) . '][wp_uid]">';
-        echo '<option value="">' . esc_html__( '— Select WP field —', 'fcrm-wp-sync' ) . '</option>';
+        echo '<option value="">' . esc_html__( '— Don\'t map —', 'fcrm-wp-sync' ) . '</option>';
         foreach ( $wp_fields as $uid => $f ) {
-            $selected    = ( $f['key'] === $wp_key && $f['source'] === $wp_src ) ? ' selected' : '';
-            $is_readonly = ! empty( $f['readonly'] ) ? 1 : 0;
+            $selected      = ( $f['key'] === $wp_key && $f['source'] === $wp_src ) ? ' selected' : '';
+            $is_readonly   = ! empty( $f['readonly'] ) ? 1 : 0;
             $options_json  = wp_json_encode( $f['options'] ?? [] );
             $date_fmt_attr = esc_attr( $f['date_format_wp'] ?? '' );
+            $src_lbl       = $wp_source_labels[ $f['source'] ] ?? $f['source'];
+            $t_lbl         = $wp_type_label( $f );
             printf(
-                '<option value="%s" data-type="%s" data-label="%s" data-readonly="%d" data-options="%s" data-date-format="%s"%s>%s</option>',
+                '<option value="%s" data-type="%s" data-label="%s" data-readonly="%d" data-options="%s" data-date-format="%s" data-source-label="%s" data-type-label="%s"%s>%s</option>',
                 esc_attr( $uid ),
                 esc_attr( $f['type'] ),
                 esc_attr( $f['label'] ),
                 $is_readonly,
                 esc_attr( $options_json ),
                 $date_fmt_attr,
+                esc_attr( $src_lbl ),
+                esc_attr( $t_lbl ),
                 $selected,
                 esc_html( $f['label'] )
             );
         }
         echo '</select>';
+        echo '<p class="fcrm-field-hint fcrm-wp-hint">' . esc_html( $wp_hint_text ) . '</p>';
         echo '</td>';
 
-        // --- FCRM Field ---
-        echo '<td>';
-        echo '<select class="fcrm-fcrm-field" name="mappings[' . esc_attr( $row_id ) . '][fcrm_uid]">';
-        echo '<option value="">' . esc_html__( '— Select FCRM field —', 'fcrm-wp-sync' ) . '</option>';
-        foreach ( $fcrm_fields as $uid => $f ) {
-            $selected     = ( $f['key'] === $fcrm_key && $f['source'] === $fcrm_src ) ? ' selected' : '';
-            $options_json = wp_json_encode( $f['options'] ?? [] );
-            printf(
-                '<option value="%s" data-type="%s" data-label="%s" data-options="%s"%s>%s</option>',
-                esc_attr( $uid ),
-                esc_attr( $f['type'] ),
-                esc_attr( $f['label'] ),
-                esc_attr( $options_json ),
-                $selected,
-                esc_html( $f['label'] )
-            );
-        }
-        echo '</select>';
-        echo '</td>';
-
-        // --- Field Type ---
+        // --- Column 3: Field Type ---
         $types = [
             'text'     => __( 'Text', 'fcrm-wp-sync' ),
             'select'   => __( 'Select / Radio', 'fcrm-wp-sync' ),
@@ -341,7 +468,7 @@ class FCRM_WP_Sync_Admin {
             echo "<option value=\"{$val}\"{$sel}>{$label}</option>";
         }
         echo '</select>';
-        // Date format hint (shown/hidden via JS when type === 'date')
+        // Date format input (shown/hidden via JS when type === 'date')
         echo '<div class="fcrm-date-format-wrap" style="margin-top:4px">';
         echo '<small>' . esc_html__( 'WP date format:', 'fcrm-wp-sync' ) . ' </small>';
         echo '<input type="text" class="fcrm-date-format-wp small-text" value="' . esc_attr( $date_fmt_wp ) . '" placeholder="m/d/Y" name="mappings[' . esc_attr( $row_id ) . '][date_format_wp]">';
@@ -350,22 +477,7 @@ class FCRM_WP_Sync_Admin {
         echo '<input type="hidden" class="fcrm-value-map-json" value="' . esc_attr( wp_json_encode( $value_map ) ) . '">';
         echo '</td>';
 
-        // --- Sync Direction ---
-        // Determine whether the chosen WP field is readonly (e.g. User ID).
-        // We look up the currently-selected WP field's readonly flag so the
-        // PHP-rendered row starts with the correct locked state.
-        $wp_uid_selected    = '';
-        foreach ( $wp_fields as $uid => $f ) {
-            if ( $f['key'] === $wp_key && $f['source'] === $wp_src ) {
-                $wp_uid_selected = $uid;
-                break;
-            }
-        }
-        $dir_is_locked = isset( $wp_fields[ $wp_uid_selected ]['readonly'] ) && $wp_fields[ $wp_uid_selected ]['readonly'];
-        if ( $dir_is_locked ) {
-            $direction = 'wp_to_fcrm'; // Force when readonly
-        }
-
+        // --- Column 4: Sync Direction ---
         $directions = [
             'both'       => __( '⇄ Both', 'fcrm-wp-sync' ),
             'wp_to_fcrm' => __( '→ WP → FluentCRM', 'fcrm-wp-sync' ),
@@ -384,13 +496,13 @@ class FCRM_WP_Sync_Admin {
         }
         echo '</td>';
 
-        // --- Enabled toggle ---
+        // --- Column 5: Enabled toggle ---
         $chk = $enabled ? ' checked' : '';
         echo '<td style="text-align:center">';
         echo '<input type="checkbox" class="fcrm-enabled" name="mappings[' . esc_attr( $row_id ) . '][enabled]" value="1"' . $chk . '>';
         echo '</td>';
 
-        // --- Remove button ---
+        // --- Column 6: Remove button ---
         echo '<td style="text-align:center">';
         echo '<button type="button" class="button fcrm-remove-row" title="' . esc_attr__( 'Remove', 'fcrm-wp-sync' ) . '">✕</button>';
         echo '</td>';

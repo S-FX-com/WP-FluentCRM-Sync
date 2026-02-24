@@ -67,7 +67,7 @@
         $row.remove();
         if (!$tbody.find('.fcrm-mapping-row').length) {
             $tbody.append('<tr class="fcrm-empty-row"><td colspan="6">' +
-                'No mappings yet. Click "Add Mapping Row" to begin.</td></tr>');
+                'No rows. Use "+ Add Row" to add a custom mapping.</td></tr>');
         }
     });
 
@@ -77,10 +77,12 @@
             autoDetectType($row);
             updateReadOnly($row);
             updateValueMapRow($row);
+            updateFieldHints($row);
         });
         $row.find('.fcrm-fcrm-field').on('change', function () {
             autoDetectType($row);
             updateValueMapRow($row);
+            updateFieldHints($row);
         });
         $row.find('.fcrm-field-type').on('change', function () {
             toggleDateFormatWrap($row);
@@ -88,10 +90,29 @@
         });
         autoDetectType($row);
         updateReadOnly($row);
+        updateFieldHints($row);
         // Restore value-map sub-row for existing select-type rows
         if ($row.find('.fcrm-field-type').val() === 'select') {
             toggleValueMapRow($row);
         }
+    }
+
+    /**
+     * Update the small hint text under each dropdown to show the field's
+     * source system and type (e.g. "ACF: Date Picker", "FluentCRM: Text").
+     * Reads data-source-label and data-type-label from the selected option.
+     */
+    function updateFieldHints($row) {
+        var $fcrmOpt = $row.find('.fcrm-fcrm-field option:selected');
+        var $wpOpt   = $row.find('.fcrm-wp-field option:selected');
+
+        var fcrmSrc  = $fcrmOpt.data('source-label') || '';
+        var fcrmType = $fcrmOpt.data('type-label')   || '';
+        var wpSrc    = $wpOpt.data('source-label')   || '';
+        var wpType   = $wpOpt.data('type-label')     || '';
+
+        $row.find('.fcrm-fcrm-hint').text(fcrmType ? fcrmSrc + ': ' + fcrmType : '');
+        $row.find('.fcrm-wp-hint').text(wpType ? wpSrc + ': ' + wpType : '');
     }
 
     function autoDetectType($row) {
@@ -284,14 +305,20 @@
         var hasError = false;
 
         $tbody.find('.fcrm-mapping-row').each(function () {
-            var $row   = $(this);
-            var rowId  = $row.data('id');
-            var wpUid  = $row.find('.fcrm-wp-field').val();
+            var $row    = $(this);
+            var rowId   = $row.data('id');
+            var wpUid   = $row.find('.fcrm-wp-field').val();
             var fcrmUid = $row.find('.fcrm-fcrm-field').val();
 
-            if (!wpUid || !fcrmUid) {
+            // A missing FCRM uid is a true error (shouldn't happen with auto-populated rows).
+            if (!fcrmUid) {
                 $row.addClass('fcrm-row-error');
                 hasError = true;
+                return; // continue
+            }
+            // Empty WP uid = "Don't map" — skip silently, not an error.
+            if (!wpUid) {
+                $row.removeClass('fcrm-row-error');
                 return; // continue
             }
             $row.removeClass('fcrm-row-error');
@@ -328,7 +355,7 @@
         });
 
         if (hasError) {
-            showNotice($notice, 'Please select both WP and FluentCRM fields for every row.', 'error');
+            showNotice($notice, 'Please select a FluentCRM field for every row (highlighted in red).', 'error');
             return;
         }
 
