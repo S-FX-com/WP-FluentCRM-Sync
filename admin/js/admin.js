@@ -348,6 +348,16 @@
     // Sync & Settings page
     // =========================================================================
 
+    // --- Field selection toggles ---
+    $('#fcrm-field-sel-all').on('click', function (e) {
+        e.preventDefault();
+        $('.fcrm-field-sel-cb').prop('checked', true);
+    });
+    $('#fcrm-field-sel-none').on('click', function (e) {
+        e.preventDefault();
+        $('.fcrm-field-sel-cb').prop('checked', false);
+    });
+
     // --- Bulk Sync ---
     function runBulkSync(direction) {
         var $progressWrap = $('#fcrm-bulk-progress');
@@ -364,14 +374,22 @@
         var synced  = 0;
         var errList = [];
 
+        var fieldIds = $('.fcrm-field-sel-cb:checked').map(function () {
+            return $(this).val();
+        }).get();
+
         function doPage() {
-            $.post(ajaxUrl, {
+            var payload = {
                 action:    'fcrm_wp_sync_bulk_sync',
                 nonce:     nonce,
                 direction: direction,
                 per_page:  perPage,
                 offset:    offset,
-            })
+            };
+            if (fieldIds.length) {
+                payload['field_ids[]'] = fieldIds;
+            }
+            $.post(ajaxUrl, payload)
             .done(function (resp) {
                 if (!resp.success) {
                     $status.text(i18n.error);

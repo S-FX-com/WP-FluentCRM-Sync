@@ -371,12 +371,13 @@ class FCRM_WP_Sync_Admin {
             wp_die( esc_html__( 'Insufficient permissions.', 'fcrm-wp-sync' ) );
         }
 
-        $settings    = get_option( 'fcrm_wp_sync_settings', [] );
-        $last_sync   = get_option( 'fcrm_wp_sync_last_bulk_sync', '' );
-        $total_users = count_users()['total_users'];
-        $total_fcrm  = class_exists( '\FluentCrm\App\Models\Subscriber' )
+        $settings       = get_option( 'fcrm_wp_sync_settings', [] );
+        $last_sync      = get_option( 'fcrm_wp_sync_last_bulk_sync', '' );
+        $total_users    = count_users()['total_users'];
+        $total_fcrm     = class_exists( '\FluentCrm\App\Models\Subscriber' )
             ? \FluentCrm\App\Models\Subscriber::count()
             : 0;
+        $active_mappings = $this->mapper->get_active_mappings();
 
         ?>
         <div class="wrap fcrm-sync-wrap">
@@ -404,6 +405,43 @@ class FCRM_WP_Sync_Admin {
             <div class="fcrm-section">
                 <h2><?php esc_html_e( 'Bulk Sync', 'fcrm-wp-sync' ); ?></h2>
                 <p><?php esc_html_e( 'Sync all records in batch. Large sites may take several minutes. The operation runs in pages to avoid timeouts.', 'fcrm-wp-sync' ); ?></p>
+
+                <?php if ( ! empty( $active_mappings ) ) : ?>
+                <div class="fcrm-field-selection">
+                    <div class="fcrm-field-selection-header">
+                        <strong><?php esc_html_e( 'Fields to sync', 'fcrm-wp-sync' ); ?></strong>
+                        <span class="fcrm-field-sel-toggle">
+                            <a href="#" id="fcrm-field-sel-all"><?php esc_html_e( 'All', 'fcrm-wp-sync' ); ?></a>
+                            &nbsp;/&nbsp;
+                            <a href="#" id="fcrm-field-sel-none"><?php esc_html_e( 'None', 'fcrm-wp-sync' ); ?></a>
+                        </span>
+                    </div>
+                    <div class="fcrm-field-selection-list">
+                        <?php foreach ( $active_mappings as $mapping ) : ?>
+                            <?php
+                            $map_id    = esc_attr( $mapping['id'] );
+                            $wp_label  = esc_html( $mapping['wp_field_label']   ?? $mapping['wp_field_key'] );
+                            $crm_label = esc_html( $mapping['fcrm_field_label'] ?? $mapping['fcrm_field_key'] );
+                            $dir_map   = [
+                                'both'       => '↔',
+                                'wp_to_fcrm' => '→',
+                                'fcrm_to_wp' => '←',
+                            ];
+                            $dir_icon = $dir_map[ $mapping['sync_direction'] ?? 'both' ] ?? '↔';
+                            ?>
+                            <label class="fcrm-field-sel-item">
+                                <input type="checkbox"
+                                       class="fcrm-field-sel-cb"
+                                       name="field_ids[]"
+                                       value="<?php echo $map_id; ?>"
+                                       checked>
+                                <span class="fcrm-field-sel-dir"><?php echo esc_html( $dir_icon ); ?></span>
+                                <?php echo $wp_label; ?> &rarr; <?php echo $crm_label; ?>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+                <?php endif; ?>
 
                 <div class="fcrm-bulk-controls">
                     <button id="fcrm-bulk-wp-to-fcrm" class="button button-primary">
@@ -650,6 +688,12 @@ class FCRM_WP_Sync_Admin {
         $per_page  = max( 1, (int) ( $_POST['per_page'] ?? 50 ) );               // phpcs:ignore
         $offset    = max( 0, (int) ( $_POST['offset']   ?? 0  ) );               // phpcs:ignore
 
+        // Optional field-ID filter: empty array means "sync all fields".
+        $raw_ids   = isset( $_POST['field_ids'] ) && is_array( $_POST['field_ids'] ) // phpcs:ignore
+            ? $_POST['field_ids']  // phpcs:ignore
+            : [];
+        $field_ids = array_map( 'sanitize_text_field', $raw_ids );
+
         $engine    = FCRM_WP_Sync_Engine::get_instance();
         $success   = [];
         $errors    = [];
@@ -663,7 +707,7 @@ class FCRM_WP_Sync_Admin {
             ] );
             foreach ( $users as $user ) {
                 try {
-                    $engine->sync_wp_to_fcrm( $user->ID );
+                    $engine->sync_wp_to_fcrm( $user->ID, $field_ids );
                     $success[] = $user->ID;
                 } catch ( \Throwable $e ) {
                     $errors[] = [ 'id' => $user->ID, 'error' => $e->getMessage() ];
@@ -677,7 +721,7 @@ class FCRM_WP_Sync_Admin {
                 ->get();
             foreach ( $contacts as $contact ) {
                 try {
-                    $engine->sync_fcrm_to_wp( $contact );
+                    $engine->sync_fcrm_to_wp( $contact, $field_ids );
                     $success[] = $contact->user_id;
                 } catch ( \Throwable $e ) {
                     $errors[] = [ 'id' => $contact->id, 'error' => $e->getMessage() ];

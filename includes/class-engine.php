@@ -132,7 +132,7 @@ class FCRM_WP_Sync_Engine {
      * @param int $user_id
      * @return Subscriber|WP_Error|null
      */
-    public function sync_wp_to_fcrm( int $user_id ) {
+    public function sync_wp_to_fcrm( int $user_id, array $field_ids = [] ) {
         $this->syncing = true;
         try {
             $user_info = get_userdata( $user_id );
@@ -143,6 +143,10 @@ class FCRM_WP_Sync_Engine {
             $data          = [];
             $custom_values = [];
             $mappings      = $this->mapper->get_active_mappings();
+
+            if ( ! empty( $field_ids ) ) {
+                $mappings = array_filter( $mappings, fn( $m ) => in_array( $m['id'] ?? '', $field_ids, true ) );
+            }
 
             foreach ( $mappings as $mapping ) {
                 if ( ! in_array( $mapping['sync_direction'], [ 'both', 'wp_to_fcrm' ], true ) ) {
@@ -204,7 +208,7 @@ class FCRM_WP_Sync_Engine {
      *
      * @param Subscriber $subscriber
      */
-    public function sync_fcrm_to_wp( Subscriber $subscriber ): void {
+    public function sync_fcrm_to_wp( Subscriber $subscriber, array $field_ids = [] ): void {
         $this->syncing = true;
         try {
             $user_id = $subscriber->user_id;
@@ -212,7 +216,11 @@ class FCRM_WP_Sync_Engine {
                 return;
             }
 
-            $mappings      = $this->mapper->get_active_mappings();
+            $mappings = $this->mapper->get_active_mappings();
+
+            if ( ! empty( $field_ids ) ) {
+                $mappings = array_filter( $mappings, fn( $m ) => in_array( $m['id'] ?? '', $field_ids, true ) );
+            }
             $custom_fields = $subscriber->custom_fields();
             $wp_user_data  = []; // for wp_update_user()
 

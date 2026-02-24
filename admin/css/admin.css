@@ -303,6 +303,49 @@
     min-width: 200px;
 }
 
+/* Field selection (bulk sync) --------------------------------------------- */
+.fcrm-field-selection {
+    margin-bottom: 16px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    background: #fafafa;
+    padding: 10px 14px;
+    max-width: 560px;
+}
+.fcrm-field-selection-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+.fcrm-field-sel-toggle a {
+    font-size: 12px;
+    text-decoration: none;
+}
+.fcrm-field-selection-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    max-height: 220px;
+    overflow-y: auto;
+}
+.fcrm-field-sel-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    cursor: pointer;
+}
+.fcrm-field-sel-item input[type="checkbox"] {
+    margin: 0;
+}
+.fcrm-field-sel-dir {
+    font-size: 11px;
+    color: #888;
+    min-width: 14px;
+    text-align: center;
+}
+
 /* Pagination -------------------------------------------------------------- */
 #fcrm-mismatch-pagination {
     display: flex;
