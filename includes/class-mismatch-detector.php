@@ -223,7 +223,10 @@ class FCRM_WP_Sync_Mismatch_Detector {
         }
 
         if ( $direction === 'use_wp' ) {
-            // Push the WP value to FCRM
+            // Push the WP value to FluentCRM.
+            // Use createOrUpdate() (same path as the main engine) to avoid calling
+            // methods directly on a model object that may be a Builder in some
+            // FluentCRM versions.
             $raw   = $this->engine->get_wp_field_value( $user_id, $wp_user, $mapping );
             $value = $this->engine->format_value(
                 $raw,
@@ -232,18 +235,16 @@ class FCRM_WP_Sync_Mismatch_Detector {
                 $mapping
             );
 
-            $subscriber = $this->find_subscriber_for_user( $wp_user );
-            if ( ! $subscriber ) {
-                return false;
+            $fcrm_key = $mapping['fcrm_field_key'];
+            $data     = [ 'email' => $wp_user->user_email ];
+
+            if ( ( $mapping['fcrm_field_source'] ?? 'default' ) === 'custom' ) {
+                $data['custom_values'] = [ $fcrm_key => $value ];
+            } else {
+                $data[ $fcrm_key ] = $value;
             }
 
-            $fcrm_key = $mapping['fcrm_field_key'];
-            if ( ( $mapping['fcrm_field_source'] ?? 'default' ) === 'custom' ) {
-                $subscriber->updateCustomFieldValues( [ $fcrm_key => $value ] );
-            } else {
-                $subscriber->{ $fcrm_key } = $value;
-                $subscriber->save();
-            }
+            FluentCrmApi( 'contacts' )->createOrUpdate( $data );
             return true;
         }
 
@@ -286,13 +287,16 @@ class FCRM_WP_Sync_Mismatch_Detector {
     /**
      * Find the FluentCRM subscriber for a WP user.
      * First tries user_id, then email.
+     * Guards against FluentCRM's query builder returning itself instead of null
+     * when no record is found (observed in some FluentCRM versions).
      */
     public function find_subscriber_for_user( \WP_User $wp_user ): ?Subscriber {
         $sub = Subscriber::where( 'user_id', $wp_user->ID )->first();
-        if ( $sub ) {
+        if ( $sub instanceof Subscriber ) {
             return $sub;
         }
-        return Subscriber::where( 'email', $wp_user->user_email )->first() ?: null;
+        $sub = Subscriber::where( 'email', $wp_user->user_email )->first();
+        return ( $sub instanceof Subscriber ) ? $sub : null;
     }
 
     /**
