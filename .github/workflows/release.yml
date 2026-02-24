@@ -1,0 +1,65 @@
+name: Auto-release on version bump
+
+# Fires on every push to main and can also be triggered manually from the
+# GitHub Actions UI (Actions → Auto-release → Run workflow).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to create tags and releases
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so we can check existing tags
+
+      # -----------------------------------------------------------------------
+      # Read the Version: header from the main plugin file.
+      # Expected format: " * Version:           1.5.1"
+      # -----------------------------------------------------------------------
+      - name: Read plugin version
+        id: version
+        run: |
+          VERSION=$(grep -oP '(?<=\* Version:\s{11})\S+' fluentcrm-wp-sync.php)
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: could not parse Version: from fluentcrm-wp-sync.php"
+            exit 1
+          fi
+          echo "version=$VERSION"       >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION"          >> "$GITHUB_OUTPUT"
+
+      # -----------------------------------------------------------------------
+      # Only proceed if this version hasn't been released yet.
+      # -----------------------------------------------------------------------
+      - name: Check whether tag already exists
+        id: tag_check
+        run: |
+          TAG="v${{ steps.version.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists — skipping release."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tag $TAG does not exist — will create release."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # -----------------------------------------------------------------------
+      # Create the release (tag + release object with auto-generated notes).
+      # GitHub automatically marks the newest full release as "Latest".
+      # -----------------------------------------------------------------------
+      - name: Create GitHub Release
+        if: steps.tag_check.outputs.exists == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --generate-notes \
+            --latest

@@ -15,7 +15,7 @@
 | New feature, backward-compatible | Minor — `1.1.x` → `1.2.0` |
 | Breaking change | Major — `1.x.x` → `2.0.0` |
 
-Current version: **1.1.1**
+Current version: **1.5.2**
 
 ### Example workflow
 
@@ -29,6 +29,18 @@ git commit -m "..."
 # 5. Push
 git push -u origin <branch>
 ```
+
+### Releases are automatic
+
+When a PR is merged to `main`, the GitHub Actions workflow
+`.github/workflows/release.yml` reads the `Version:` header and automatically
+creates a tagged GitHub Release (e.g. `v1.5.1`) if one doesn't exist yet.
+**No manual release creation is needed.**
+
+The WordPress auto-updater in the plugin calls the GitHub
+`/releases/latest` API, which only sees full (non-pre-release, non-draft)
+releases. The workflow always creates full releases, so the updater will
+pick up new versions as soon as the PR lands on `main`.
 
 ## Git branch
 
