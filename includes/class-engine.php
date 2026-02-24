@@ -315,6 +315,17 @@ class FCRM_WP_Sync_Engine {
             $wp_display   = is_array( $wp_raw )   ? implode( ', ', $wp_raw )   : (string) ( $wp_raw   ?? '' );
             $fcrm_display = is_array( $fcrm_raw ) ? implode( ', ', $fcrm_raw ) : (string) ( $fcrm_raw ?? '' );
 
+            // For date fields, normalise both sides to Y-m-d before comparing
+            // so that e.g. "08/23/1992" and "1992-08-23" are treated as equal.
+            if ( ( $mapping['field_type'] ?? 'text' ) === 'date'
+                && ( $wp_display !== '' || $fcrm_display !== '' )
+            ) {
+                $match = $this->normalize_date( $wp_display, $mapping )
+                      === $this->normalize_date( $fcrm_display, $mapping );
+            } else {
+                $match = $wp_display === $fcrm_display;
+            }
+
             $rows[] = [
                 'id'         => $mapping['id'] ?? '',
                 'wp_label'   => $mapping['wp_field_label']   ?? $mapping['wp_field_key'],
@@ -322,7 +333,7 @@ class FCRM_WP_Sync_Engine {
                 'direction'  => $mapping['sync_direction'] ?? 'both',
                 'wp_value'   => $wp_display,
                 'fcrm_value' => $fcrm_display,
-                'match'      => $wp_display === $fcrm_display,
+                'match'      => $match,
             ];
         }
 
@@ -484,33 +495,63 @@ class FCRM_WP_Sync_Engine {
      *
      * FluentCRM stores dates as Y-m-d.
      * ACF date pickers use the return_format defined on the field (default m/d/Y).
-     * Non-ACF WP meta can be anything — we do best-effort strtotime().
+     * Non-ACF WP meta can be anything — we use DateTime::createFromFormat() with
+     * the configured WP format, falling back to strtotime() for ISO strings from
+     * the FluentCRM side.
      */
     private function format_date( $value, string $direction, array $mapping ): string {
         if ( empty( $value ) ) {
             return '';
         }
 
-        // Convert to Unix timestamp first
-        $ts = false;
-        if ( is_numeric( $value ) && strlen( (string) $value ) === 8 ) {
-            // Compact YYYYMMDD
-            $ts = strtotime( substr( $value, 0, 4 ) . '-' . substr( $value, 4, 2 ) . '-' . substr( $value, 6, 2 ) );
-        } else {
-            $ts = strtotime( (string) $value );
-        }
+        $canonical = $this->normalize_date( (string) $value, $mapping );
 
-        if ( $ts === false ) {
-            return (string) $value; // give it back unchanged if unparseable
+        if ( $canonical === '' ) {
+            return (string) $value; // unparseable — return unchanged
         }
 
         if ( $direction === 'to_fcrm' ) {
-            return date( 'Y-m-d', $ts );
+            return $canonical; // already Y-m-d
         }
 
-        // to_wp: use the ACF return format if available, else Y-m-d
-        $fmt = $mapping['date_format_wp'] ?? 'Y-m-d';
-        return date( $fmt, $ts );
+        // to_wp: reformat from Y-m-d to the configured WP format
+        $fmt  = $mapping['date_format_wp'] ?? 'Y-m-d';
+        $date = \DateTime::createFromFormat( 'Y-m-d', $canonical );
+        return $date ? $date->format( $fmt ) : $canonical;
+    }
+
+    /**
+     * Parse any supported date string to a canonical Y-m-d string.
+     *
+     * Tries (in order):
+     *   1. Compact YYYYMMDD integer (e.g. 19920823)
+     *   2. The WP format configured for this mapping (e.g. m/d/Y)
+     *   3. strtotime() as a final fallback for ISO and other common formats
+     *
+     * Returns '' when the value cannot be parsed.
+     */
+    private function normalize_date( string $value, array $mapping ): string {
+        if ( $value === '' ) {
+            return '';
+        }
+
+        // 1. Compact YYYYMMDD
+        if ( is_numeric( $value ) && strlen( $value ) === 8 ) {
+            $iso = substr( $value, 0, 4 ) . '-' . substr( $value, 4, 2 ) . '-' . substr( $value, 6, 2 );
+            $ts  = strtotime( $iso );
+            return $ts !== false ? date( 'Y-m-d', $ts ) : '';
+        }
+
+        // 2. Parse using the known WP format (avoids strtotime() locale ambiguity)
+        $wp_fmt = $mapping['date_format_wp'] ?? 'Y-m-d';
+        $date   = \DateTime::createFromFormat( $wp_fmt, $value );
+        if ( $date && $date->format( $wp_fmt ) === $value ) {
+            return $date->format( 'Y-m-d' );
+        }
+
+        // 3. Fallback — handles Y-m-d from FluentCRM and other unambiguous formats
+        $ts = strtotime( $value );
+        return $ts !== false ? date( 'Y-m-d', $ts ) : '';
     }
 
     /**
