@@ -122,13 +122,13 @@ class FCRM_WP_Sync_REST_API {
             'args'                => [
                 'user_id'    => [ 'type' => 'integer', 'required' => true ],
                 'direction'  => [
-                    'type'     => 'string',
-                    'enum'     => [ 'use_wp', 'use_fcrm' ],
-                    'required' => true,
+                    'type'    => 'string',
+                    'enum'    => [ 'use_wp', 'use_fcrm' ],
+                    'default' => 'use_wp',
                 ],
                 'scope'      => [
                     'type'    => 'string',
-                    'enum'    => [ 'field', 'all' ],
+                    'enum'    => [ 'field', 'all', 'empty' ],
                     'default' => 'field',
                 ],
                 'mapping_id' => [ 'type' => 'string' ],
@@ -312,9 +312,13 @@ class FCRM_WP_Sync_REST_API {
         $scope      = $request->get_param( 'scope' );
         $mapping_id = (string) ( $request->get_param( 'mapping_id' ) ?? '' );
 
-        $ok = ( $scope === 'all' )
-            ? $this->detector->resolve_user( $user_id, $direction )
-            : $this->detector->resolve_field( $user_id, $mapping_id, $direction );
+        if ( $scope === 'all' ) {
+            $ok = $this->detector->resolve_user( $user_id, $direction );
+        } elseif ( $scope === 'empty' ) {
+            $ok = $this->detector->resolve_user_empty_fields( $user_id );
+        } else {
+            $ok = $this->detector->resolve_field( $user_id, $mapping_id, $direction );
+        }
 
         if ( $ok ) {
             return rest_ensure_response( [ 'resolved' => true ] );

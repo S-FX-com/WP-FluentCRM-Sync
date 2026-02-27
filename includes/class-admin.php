@@ -924,9 +924,13 @@ class FCRM_WP_Sync_Admin {
         }
 
         try {
-            $ok = ( $scope === 'all' )
-                ? $this->detector->resolve_user( $user_id, $direction )
-                : $this->detector->resolve_field( $user_id, $mapping_id, $direction );
+            if ( $scope === 'all' ) {
+                $ok = $this->detector->resolve_user( $user_id, $direction );
+            } elseif ( $scope === 'empty' ) {
+                $ok = $this->detector->resolve_user_empty_fields( $user_id );
+            } else {
+                $ok = $this->detector->resolve_field( $user_id, $mapping_id, $direction );
+            }
         } catch ( \Throwable $e ) {
             wp_send_json_error( [ 'message' => $e->getMessage() ] );
         }

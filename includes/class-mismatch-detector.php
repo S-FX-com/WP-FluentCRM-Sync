@@ -197,6 +197,67 @@ class FCRM_WP_Sync_Mismatch_Detector {
     }
 
     /**
+     * Resolve only the "empty-side" mismatches for a single user.
+     *
+     * For each mismatched field:
+     *  - WP populated + FCRM empty  → push WP value to FCRM  (use_wp)
+     *  - FCRM populated + WP empty  → push FCRM value to WP  (use_fcrm)
+     *  - Both populated but different → skip (a true conflict; admin must decide)
+     *  - Both empty → skip (should not appear as a mismatch but guard anyway)
+     *
+     * @param int $user_id
+     * @return bool
+     */
+    public function resolve_user_empty_fields( int $user_id ): bool {
+        $wp_user = get_userdata( $user_id );
+        if ( ! $wp_user ) {
+            return false;
+        }
+
+        $subscriber = $this->find_subscriber_for_user( $wp_user );
+        if ( ! $subscriber ) {
+            return false;
+        }
+
+        $mappings      = $this->mapper->get_active_mappings();
+        $custom_fields = $subscriber->custom_fields();
+
+        foreach ( $mappings as $mapping ) {
+            // Only process bidirectional fields — same filter as compare_fields().
+            if ( ( $mapping['sync_direction'] ?? 'both' ) !== 'both' ) {
+                continue;
+            }
+
+            $mapping_id = $mapping['id'] ?? '';
+            if ( ! $mapping_id ) {
+                continue;
+            }
+
+            // Raw WP value
+            $wp_raw = $this->engine->get_wp_field_value( $user_id, $wp_user, $mapping );
+
+            // Raw FCRM value
+            $fcrm_key = $mapping['fcrm_field_key'];
+            $fcrm_src = $mapping['fcrm_field_source'] ?? 'default';
+            $fcrm_raw = ( $fcrm_src === 'custom' )
+                ? ( $custom_fields[ $fcrm_key ] ?? null )
+                : ( $subscriber->{ $fcrm_key } ?? null );
+
+            $wp_empty   = ( $wp_raw   === null || $wp_raw   === '' );
+            $fcrm_empty = ( $fcrm_raw === null || $fcrm_raw === '' );
+
+            if ( $wp_empty && ! $fcrm_empty ) {
+                $this->resolve_field( $user_id, $mapping_id, 'use_fcrm' );
+            } elseif ( ! $wp_empty && $fcrm_empty ) {
+                $this->resolve_field( $user_id, $mapping_id, 'use_wp' );
+            }
+            // Both non-empty (true conflict) or both empty → leave untouched.
+        }
+
+        return true;
+    }
+
+    /**
      * Resolve a SINGLE field mismatch.
      *
      * @param int    $user_id
@@ -236,11 +297,26 @@ class FCRM_WP_Sync_Mismatch_Detector {
             );
 
             $fcrm_key = $mapping['fcrm_field_key'];
-            $data     = [ 'email' => $wp_user->user_email ];
+
+            // Find the subscriber to use their actual FCRM email as the
+            // createOrUpdate() lookup key.  Using the WP email here would cause
+            // createOrUpdate() to create a new duplicate contact whenever the WP
+            // email differs from the linked FluentCRM subscriber's email.
+            $subscriber   = $this->find_subscriber_for_user( $wp_user );
+            $lookup_email = $subscriber ? $subscriber->email : $wp_user->user_email;
+            $data         = [ 'email' => $lookup_email ];
 
             if ( ( $mapping['fcrm_field_source'] ?? 'default' ) === 'custom' ) {
                 $data['custom_values'] = [ $fcrm_key => $value ];
             } else {
+                // For the email field itself, update the subscriber model directly
+                // so createOrUpdate() can still find the contact by the existing
+                // (lookup) email rather than the new (WP) email.
+                if ( $fcrm_key === 'email' && $subscriber ) {
+                    $subscriber->email = $value;
+                    $subscriber->save();
+                    return true;
+                }
                 $data[ $fcrm_key ] = $value;
             }
 

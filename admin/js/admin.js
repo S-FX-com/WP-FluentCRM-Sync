@@ -676,6 +676,7 @@
             // Wire resolve buttons
             $container.find('.fcrm-resolve-btn').on('click', handleResolve);
             $container.find('.fcrm-resolve-all-btn').on('click', handleResolveAll);
+            $container.find('.fcrm-resolve-empty-btn').on('click', handleResolveEmpty);
         })
         .fail(function () {
             $container.html('<p class="fcrm-error">' + i18n.error + '</p>');
@@ -693,7 +694,8 @@
             html += ' <span class="fcrm-mismatch-count">' + record.fields.length + ' mismatch(es)</span>';
             html += '<span class="fcrm-resolve-all-wrap">';
             html += '<button class="button fcrm-resolve-all-btn" data-user-id="' + record.user_id + '" data-direction="use_wp">Use all WP</button> ';
-            html += '<button class="button fcrm-resolve-all-btn" data-user-id="' + record.user_id + '" data-direction="use_fcrm">Use all FCRM</button>';
+            html += '<button class="button fcrm-resolve-all-btn" data-user-id="' + record.user_id + '" data-direction="use_fcrm">Use all FCRM</button> ';
+            html += '<button class="button fcrm-resolve-empty-btn" data-user-id="' + record.user_id + '">Sync All Empty</button>';
             html += '</span>';
             html += '</div>'; // .header
 
@@ -792,6 +794,46 @@
         })
         .fail(function () {
             $btn.prop('disabled', false).text(direction === 'use_wp' ? 'Use all WP' : 'Use all FCRM');
+            showNotice($resolveNotice, i18n.error, 'error');
+        });
+    }
+
+    function handleResolveEmpty() {
+        var $btn    = $(this);
+        var userId  = $btn.data('user-id');
+        var $record = $btn.closest('.fcrm-mismatch-record');
+
+        $btn.prop('disabled', true).text(i18n.resolving);
+
+        $.post(ajaxUrl, {
+            action:  'fcrm_wp_sync_resolve_mismatch',
+            nonce:   nonce,
+            user_id: userId,
+            scope:   'empty',
+        })
+        .done(function (resp) {
+            if (resp.success) {
+                // Mark only the rows where one side was empty — leave true
+                // two-sided conflicts (both values present but different) intact.
+                $record.find('tbody tr').each(function () {
+                    var $row    = $(this);
+                    var wpVal   = $.trim($row.find('.fcrm-val-wp').text());
+                    var fcrmVal = $.trim($row.find('.fcrm-val-fcrm').text());
+                    if (wpVal === '(empty)' || fcrmVal === '(empty)') {
+                        $row.addClass('fcrm-resolved').find('td:last-child').html(
+                            '<span class="fcrm-resolved-badge">' + i18n.resolved + '</span>'
+                        );
+                    }
+                });
+                $btn.prop('disabled', true);
+            } else {
+                $btn.prop('disabled', false).text('Sync All Empty');
+                var msg = (resp.data && resp.data.message) ? resp.data.message : i18n.error;
+                showNotice($resolveNotice, msg, 'error');
+            }
+        })
+        .fail(function () {
+            $btn.prop('disabled', false).text('Sync All Empty');
             showNotice($resolveNotice, i18n.error, 'error');
         });
     }

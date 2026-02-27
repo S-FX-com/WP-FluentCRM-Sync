@@ -155,6 +155,16 @@ class FCRM_WP_Sync_Engine {
                 return null;
             }
 
+            // Find the subscriber that is actually linked to this WP user so we
+            // can use their FluentCRM email as the createOrUpdate() lookup key.
+            // Without this, when the WP email differs from the FCRM subscriber's
+            // email, createOrUpdate() fails to find the existing contact and
+            // creates a duplicate instead of updating the correct record.
+            $existing_sub = Subscriber::where( 'user_id', $user_id )->first();
+            if ( ! ( $existing_sub instanceof Subscriber ) ) {
+                $existing_sub = Subscriber::where( 'email', $user_info->user_email )->first();
+            }
+
             $data          = [];
             $custom_values = [];
             $mappings      = $this->mapper->get_active_mappings();
@@ -194,8 +204,24 @@ class FCRM_WP_Sync_Engine {
                 $data['custom_values'] = $custom_values;
             }
 
-            // Always ensure email is present
-            if ( empty( $data['email'] ) ) {
+            // Resolve the lookup email for createOrUpdate().
+            // Always use the subscriber's existing FCRM email as the key so the
+            // correct contact is found.  If the email field itself is being synced
+            // to a new value, update the subscriber's email directly first so that
+            // the subsequent createOrUpdate() (keyed on the new email) still finds
+            // the right record rather than creating a duplicate.
+            $intended_email = null;
+            if ( $existing_sub instanceof Subscriber ) {
+                $mapped_email = $data['email'] ?? null;
+                if ( $mapped_email && $mapped_email !== $existing_sub->email ) {
+                    // Email field is being changed — update it on the model now.
+                    $existing_sub->email = $mapped_email;
+                    $existing_sub->save();
+                    // createOrUpdate() will find it by the new email.
+                } elseif ( empty( $data['email'] ) ) {
+                    $data['email'] = $existing_sub->email;
+                }
+            } elseif ( empty( $data['email'] ) ) {
                 $data['email'] = $user_info->user_email;
             }
 
