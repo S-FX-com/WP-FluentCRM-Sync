@@ -74,12 +74,23 @@ class FCRM_WP_Sync_Mismatch_Detector {
             $field_mismatches = $this->compare_fields( $wp_user->ID, $wp_user, $subscriber, $mappings );
 
             if ( ! empty( $field_mismatches ) ) {
+                // Flag when the linked FCRM contact has a different email than
+                // the WP user.  This can happen when the subscriber was matched
+                // by user_id (not email) and may indicate a mis-linkage — e.g.
+                // a deleted user's FCRM contact was re-assigned to a new WP user.
+                $sub_email         = $subscriber->email ?? '';
+                $emails_differ     = ( strtolower( $sub_email ) !== strtolower( $wp_user->user_email ) );
+
                 $all_items[] = [
-                    'user_id'       => $wp_user->ID,
-                    'user_email'    => $wp_user->user_email,
-                    'user_display'  => $wp_user->display_name,
-                    'subscriber_id' => $subscriber->id,
-                    'fields'        => $field_mismatches,
+                    'user_id'                  => $wp_user->ID,
+                    'user_email'               => $wp_user->user_email,
+                    'user_display'             => $wp_user->display_name,
+                    'subscriber_id'            => $subscriber->id,
+                    'subscriber_email'         => $sub_email,
+                    'subscriber_email_mismatch'=> $emails_differ,
+                    'wp_edit_url'              => admin_url( 'user-edit.php?user_id=' . $wp_user->ID ),
+                    'fcrm_contact_url'         => admin_url( 'admin.php?page=fluentcrm-admin&route=contacts&id=' . $subscriber->id ),
+                    'fields'                   => $field_mismatches,
                 ];
             }
         }
@@ -255,6 +266,37 @@ class FCRM_WP_Sync_Mismatch_Detector {
         }
 
         return true;
+    }
+
+    /**
+     * Resolve empty-side mismatches across ALL users in a single pass.
+     *
+     * Iterates every WP user that has a linked FluentCRM subscriber and calls
+     * resolve_user_empty_fields() on each.  Fields where both sides are
+     * populated but different are left untouched — those require a manual
+     * "Use WP" / "Use FCRM" decision.
+     *
+     * @return int  Number of users for whom at least one empty field was filled.
+     */
+    public function resolve_all_empty_globally(): int {
+        // Allow more execution time — large user bases can be slow.
+        // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+        @set_time_limit( 300 );
+
+        $users  = get_users( [ 'fields' => 'all', 'number' => -1 ] );
+        $synced = 0;
+
+        foreach ( $users as $wp_user ) {
+            $subscriber = $this->find_subscriber_for_user( $wp_user );
+            if ( ! $subscriber ) {
+                continue;
+            }
+            if ( $this->resolve_user_empty_fields( $wp_user->ID ) ) {
+                $synced++;
+            }
+        }
+
+        return $synced;
     }
 
     /**
