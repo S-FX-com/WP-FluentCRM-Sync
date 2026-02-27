@@ -634,6 +634,38 @@
         }
     });
 
+    // Global: Sync All Empty Fields across every contact at once.
+    $('#fcrm-sync-all-empty-global').on('click', function () {
+        var $btn = $(this);
+        if ( !window.confirm('This will fill empty fields across ALL contacts. Fields where both sides have different values will not be changed. Continue?') ) {
+            return;
+        }
+        $btn.prop('disabled', true).text('Syncing…');
+        $resolveNotice.hide();
+
+        $.post(ajaxUrl, {
+            action: 'fcrm_wp_sync_sync_all_empty',
+            nonce:  nonce,
+        })
+        .done(function (resp) {
+            if (resp.success) {
+                showNotice($resolveNotice, resp.data.message || 'Done.', 'success');
+                // Re-scan so the resolver reflects the updated state.
+                mismatchPage = 1;
+                loadMismatches();
+            } else {
+                var msg = (resp.data && resp.data.message) ? resp.data.message : i18n.error;
+                showNotice($resolveNotice, msg, 'error');
+            }
+        })
+        .fail(function () {
+            showNotice($resolveNotice, i18n.error, 'error');
+        })
+        .always(function () {
+            $btn.prop('disabled', false).text('Sync All Empty Fields (All Records)');
+        });
+    });
+
     function loadMismatches() {
         var $container  = $('#fcrm-mismatches-container');
         var $status     = $('#fcrm-scan-status');
@@ -695,12 +727,28 @@
             html += '<span class="fcrm-resolve-all-wrap">';
             html += '<button class="button fcrm-resolve-all-btn" data-user-id="' + record.user_id + '" data-direction="use_wp">Use all WP</button> ';
             html += '<button class="button fcrm-resolve-all-btn" data-user-id="' + record.user_id + '" data-direction="use_fcrm">Use all FCRM</button> ';
-            html += '<button class="button fcrm-resolve-empty-btn" data-user-id="' + record.user_id + '">Sync All Empty</button>';
+            html += '<button class="button fcrm-resolve-empty-btn" data-user-id="' + record.user_id + '">Sync Empty</button>';
             html += '</span>';
             html += '</div>'; // .header
 
+            // Warn if the FCRM contact's email differs from the WP user's email.
+            // This usually means the contact was matched by user_id only and may
+            // point to a mis-linked legacy record (e.g. a deleted user's contact
+            // whose user_id was later re-used or manually reassigned).
+            if (record.subscriber_email_mismatch) {
+                html += '<div class="fcrm-email-mismatch-warning notice notice-warning inline" style="margin:4px 0 8px;padding:8px 12px">';
+                html += '&#9888; The linked FluentCRM contact uses email <strong>' + escHtml(record.subscriber_email) + '</strong>, ';
+                html += 'which differs from this WP user&#39;s email <strong>' + escHtml(record.user_email) + '</strong>. ';
+                html += 'The contact was matched by WordPress User ID — please verify this is the correct record before syncing.';
+                html += '</div>';
+            }
+
+            // Column headers include direct edit links for quick verification.
+            var wpArrow   = ' <a href="' + escHtml(record.wp_edit_url)      + '" target="_blank" title="Edit WP user" style="text-decoration:none">&#8599;</a>';
+            var fcrmArrow = ' <a href="' + escHtml(record.fcrm_contact_url) + '" target="_blank" title="View FluentCRM contact" style="text-decoration:none">&#8599;</a>';
+
             html += '<table class="fcrm-mismatch-fields widefat">';
-            html += '<thead><tr><th>Field</th><th>WP Value</th><th>FluentCRM Value</th><th>Action</th></tr></thead>';
+            html += '<thead><tr><th>Field</th><th>WP Value' + wpArrow + '</th><th>FluentCRM Value' + fcrmArrow + '</th><th>Action</th></tr></thead>';
             html += '<tbody>';
 
             record.fields.forEach(function (field) {

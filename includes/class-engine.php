@@ -416,12 +416,20 @@ class FCRM_WP_Sync_Engine {
 
             case 'acf':
                 if ( function_exists( 'get_field' ) ) {
-                    // For date fields, skip ACF's Return Format formatting and
-                    // fetch the raw stored value (Ymd, e.g. "20250107").  This
-                    // avoids strtotime() ambiguity between m/d/Y and d/m/Y — the
-                    // compact 8-digit form is always unambiguous.
-                    $raw_for_date = ( ( $mapping['field_type'] ?? 'text' ) === 'date' );
-                    return get_field( $key, 'user_' . $user_id, ! $raw_for_date ) ?: null;
+                    $val = get_field( $key, 'user_' . $user_id );
+                    // For date fields: normalise the ACF-formatted value to
+                    // canonical Y-m-d right here, before the rest of the engine
+                    // or the mismatch detector ever sees it.  ACF's get_field()
+                    // applies the field's "Return Format" setting (m/d/Y, d/m/Y,
+                    // Y-m-d, …).  We use get_field_object() to discover that
+                    // exact format and parse it with DateTime::createFromFormat()
+                    // — which is unambiguous — rather than relying on strtotime().
+                    if ( ( $mapping['field_type'] ?? 'text' ) === 'date'
+                        && $val !== null && $val !== false && $val !== ''
+                    ) {
+                        return $this->acf_date_to_ymd( $key, 'user_' . $user_id, (string) $val );
+                    }
+                    return $val ?: null;
                 }
                 // Fallback to user_meta
                 return get_user_meta( $user_id, $key, true ) ?: null;
@@ -611,6 +619,47 @@ class FCRM_WP_Sync_Engine {
         // 3. Fallback — handles Y-m-d from FluentCRM and other unambiguous formats
         $ts = strtotime( $value );
         return $ts !== false ? date( 'Y-m-d', $ts ) : '';
+    }
+
+    /**
+     * Convert an ACF-formatted date string to canonical Y-m-d.
+     *
+     * ACF's get_field() returns dates formatted per the field's "Return
+     * Format" (e.g. "m/d/Y", "d/m/Y", "Y-m-d").  We use get_field_object()
+     * to discover the exact format in use, then parse with
+     * DateTime::createFromFormat() — which is unambiguous — rather than
+     * handing the locale-sensitive string to strtotime().
+     *
+     * Falls back through compact Ymd detection and strtotime() for fields
+     * that are not registered in ACF (i.e. plain user_meta keys that happen
+     * to be mapped as date fields).
+     *
+     * @param string $key     ACF field name or key.
+     * @param string $context ACF context string, e.g. 'user_42'.
+     * @param string $val     The already-formatted date string from get_field().
+     * @return string         Canonical Y-m-d, or $val if unparseable.
+     */
+    private function acf_date_to_ymd( string $key, string $context, string $val ): string {
+        // 1. Ask ACF for the field definition to get its Return Format.
+        if ( function_exists( 'get_field_object' ) ) {
+            $field_obj = get_field_object( $key, $context );
+            $fmt       = $field_obj['return_format'] ?? null;
+            if ( $fmt ) {
+                $dt = \DateTime::createFromFormat( $fmt, $val );
+                if ( $dt && $dt->format( $fmt ) === $val ) {
+                    return $dt->format( 'Y-m-d' );
+                }
+            }
+        }
+
+        // 2. Compact Ymd integer stored directly (e.g. "20250107").
+        if ( is_numeric( $val ) && strlen( $val ) === 8 ) {
+            return substr( $val, 0, 4 ) . '-' . substr( $val, 4, 2 ) . '-' . substr( $val, 6, 2 );
+        }
+
+        // 3. Last resort — handles ISO Y-m-d and other strtotime-parseable strings.
+        $ts = strtotime( $val );
+        return $ts !== false ? date( 'Y-m-d', $ts ) : $val;
     }
 
     /**

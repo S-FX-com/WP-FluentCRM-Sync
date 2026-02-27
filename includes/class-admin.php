@@ -42,6 +42,7 @@ class FCRM_WP_Sync_Admin {
         add_action( 'wp_ajax_fcrm_wp_sync_bulk_sync',        [ $this, 'ajax_bulk_sync' ] );
         add_action( 'wp_ajax_fcrm_wp_sync_resolve_mismatch', [ $this, 'ajax_resolve_mismatch' ] );
         add_action( 'wp_ajax_fcrm_wp_sync_get_mismatches',   [ $this, 'ajax_get_mismatches' ] );
+        add_action( 'wp_ajax_fcrm_wp_sync_sync_all_empty',   [ $this, 'ajax_sync_all_empty' ] );
         add_action( 'wp_ajax_fcrm_wp_sync_save_pmp_settings', [ $this, 'ajax_save_pmp_settings' ] );
         add_action( 'wp_ajax_fcrm_wp_sync_search_users',     [ $this, 'ajax_search_users' ] );
         add_action( 'wp_ajax_fcrm_wp_sync_sample_data',      [ $this, 'ajax_sample_data' ] );
@@ -700,6 +701,9 @@ class FCRM_WP_Sync_Admin {
                 <button id="fcrm-scan-mismatches" class="button button-primary">
                     <?php esc_html_e( 'Scan for Mismatches', 'fcrm-wp-sync' ); ?>
                 </button>
+                <button id="fcrm-sync-all-empty-global" class="button button-secondary" style="margin-left:8px">
+                    <?php esc_html_e( 'Sync All Empty Fields (All Records)', 'fcrm-wp-sync' ); ?>
+                </button>
                 <span id="fcrm-scan-status" style="margin-left:12px"></span>
             </div>
 
@@ -939,6 +943,34 @@ class FCRM_WP_Sync_Admin {
             wp_send_json_success();
         } else {
             wp_send_json_error( [ 'message' => 'Could not resolve: no linked FluentCRM subscriber found for this user.' ] );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // AJAX: Global Sync All Empty
+    // -----------------------------------------------------------------------
+
+    public function ajax_sync_all_empty(): void {
+        check_ajax_referer( 'fcrm_wp_sync_nonce', 'nonce' );
+        if ( ! current_user_can( 'manage_options' ) ) {
+            wp_send_json_error( 'Insufficient permissions', 403 );
+        }
+
+        try {
+            $count = $this->detector->resolve_all_empty_globally();
+            /* translators: %d = number of contacts updated */
+            $msg = sprintf(
+                _n(
+                    'Empty fields filled for %d contact.',
+                    'Empty fields filled for %d contacts.',
+                    $count,
+                    'fcrm-wp-sync'
+                ),
+                $count
+            );
+            wp_send_json_success( [ 'message' => $msg, 'count' => $count ] );
+        } catch ( \Throwable $e ) {
+            wp_send_json_error( [ 'message' => $e->getMessage() ] );
         }
     }
 
