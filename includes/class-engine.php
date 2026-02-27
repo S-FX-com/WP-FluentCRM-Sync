@@ -214,10 +214,23 @@ class FCRM_WP_Sync_Engine {
             if ( $existing_sub instanceof Subscriber ) {
                 $mapped_email = $data['email'] ?? null;
                 if ( $mapped_email && $mapped_email !== $existing_sub->email ) {
-                    // Email field is being changed — update it on the model now.
-                    $existing_sub->email = $mapped_email;
-                    $existing_sub->save();
-                    // createOrUpdate() will find it by the new email.
+                    // Only update the email if no other subscriber already owns
+                    // the target address — changing it would violate the UNIQUE
+                    // constraint and throw a SQL duplicate-entry error.
+                    $conflict = Subscriber::where( 'email', $mapped_email )
+                        ->where( 'id', '!=', $existing_sub->id )
+                        ->first();
+                    if ( $conflict instanceof Subscriber ) {
+                        // Conflict — keep the FCRM email as the lookup key and
+                        // drop the new email from the update payload.
+                        $data['email'] = $existing_sub->email;
+                    } else {
+                        // Safe to move the email — update the model first so
+                        // createOrUpdate() can find the contact by the new address.
+                        $existing_sub->email = $mapped_email;
+                        $existing_sub->save();
+                        // $data['email'] already holds $mapped_email → lookup works.
+                    }
                 } elseif ( empty( $data['email'] ) ) {
                     $data['email'] = $existing_sub->email;
                 }
@@ -403,7 +416,12 @@ class FCRM_WP_Sync_Engine {
 
             case 'acf':
                 if ( function_exists( 'get_field' ) ) {
-                    return get_field( $key, 'user_' . $user_id );
+                    // For date fields, skip ACF's Return Format formatting and
+                    // fetch the raw stored value (Ymd, e.g. "20250107").  This
+                    // avoids strtotime() ambiguity between m/d/Y and d/m/Y — the
+                    // compact 8-digit form is always unambiguous.
+                    $raw_for_date = ( ( $mapping['field_type'] ?? 'text' ) === 'date' );
+                    return get_field( $key, 'user_' . $user_id, ! $raw_for_date ) ?: null;
                 }
                 // Fallback to user_meta
                 return get_user_meta( $user_id, $key, true ) ?: null;
@@ -571,7 +589,7 @@ class FCRM_WP_Sync_Engine {
      *
      * Returns '' when the value cannot be parsed.
      */
-    private function normalize_date( string $value, array $mapping ): string {
+    public function normalize_date( string $value, array $mapping ): string {
         if ( $value === '' ) {
             return '';
         }
