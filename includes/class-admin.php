@@ -929,20 +929,36 @@ class FCRM_WP_Sync_Admin {
 
         try {
             if ( $scope === 'all' ) {
-                $ok = $this->detector->resolve_user( $user_id, $direction );
+                $ok    = $this->detector->resolve_user( $user_id, $direction );
+                $steps = [];
             } elseif ( $scope === 'empty' ) {
-                $ok = $this->detector->resolve_user_empty_fields( $user_id );
+                $ok    = $this->detector->resolve_user_empty_fields( $user_id );
+                $steps = [];
             } else {
-                $ok = $this->detector->resolve_field( $user_id, $mapping_id, $direction );
+                // resolve_field() returns detailed step log for the UI.
+                $result = $this->detector->resolve_field( $user_id, $mapping_id, $direction );
+                $ok     = $result['ok']    ?? false;
+                $steps  = $result['steps'] ?? [];
             }
         } catch ( \Throwable $e ) {
-            wp_send_json_error( [ 'message' => $e->getMessage() ] );
+            wp_send_json_error( [
+                'message' => $e->getMessage(),
+                'steps'   => [ [ 'text' => 'Exception: ' . $e->getMessage(), 'status' => 'error' ] ],
+            ] );
         }
 
         if ( $ok ) {
-            wp_send_json_success();
+            wp_send_json_success( [ 'steps' => $steps ] );
         } else {
-            wp_send_json_error( [ 'message' => 'Could not resolve: no linked FluentCRM subscriber found for this user.' ] );
+            $msg = 'Could not resolve: no linked FluentCRM subscriber found for this user.';
+            // If steps contain a more specific error, use the last error step.
+            foreach ( array_reverse( $steps ) as $step ) {
+                if ( ( $step['status'] ?? '' ) === 'error' ) {
+                    $msg = $step['text'];
+                    break;
+                }
+            }
+            wp_send_json_error( [ 'message' => $msg, 'steps' => $steps ] );
         }
     }
 

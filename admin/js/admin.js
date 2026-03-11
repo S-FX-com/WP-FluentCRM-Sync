@@ -777,13 +777,52 @@
         return html;
     }
 
+    /**
+     * Build an HTML log block from an array of step objects.
+     * Each step: { text: string, status: 'ok'|'warn'|'error' }
+     */
+    function buildStepLog(steps, finalOk) {
+        if (!steps || !steps.length) {
+            return '';
+        }
+        var html = '<div class="fcrm-resolve-log">';
+        steps.forEach(function (step) {
+            var icon = step.status === 'ok' ? '&#10003;'  // ✓
+                     : step.status === 'warn' ? '&#9888;'  // ⚠
+                     : '&#10007;';                          // ✗
+            html += '<div class="fcrm-resolve-step fcrm-step-' + escHtml(step.status) + '">';
+            html += '<span class="fcrm-step-icon">' + icon + '</span> ';
+            html += escHtml(step.text);
+            html += '</div>';
+        });
+        html += '<div class="fcrm-resolve-step fcrm-step-' + (finalOk ? 'ok' : 'error') + ' fcrm-step-final">';
+        html += finalOk ? '&#10003; Resolved — data verified.' : '&#10007; Resolution failed — see details above.';
+        html += '</div>';
+        html += '</div>';
+        return html;
+    }
+
+    /**
+     * Insert a step-log row beneath the given field row.
+     */
+    function showStepLogUnderRow($row, steps, finalOk) {
+        // Remove any previous log for this row
+        $row.next('.fcrm-resolve-log-row').remove();
+        var colspan = $row.find('td').length;
+        var $logRow = $('<tr class="fcrm-resolve-log-row"><td colspan="' + colspan + '">' + buildStepLog(steps, finalOk) + '</td></tr>');
+        $row.after($logRow);
+    }
+
     function handleResolve() {
         var $btn       = $(this);
         var userId     = $btn.data('user-id');
         var mappingId  = $btn.data('mapping-id');
         var direction  = $btn.data('direction');
+        var $row       = $btn.closest('tr');
 
         $btn.prop('disabled', true).text(i18n.resolving);
+        // Remove any previous log
+        $row.next('.fcrm-resolve-log-row').remove();
 
         $.post(ajaxUrl, {
             action:     'fcrm_wp_sync_resolve_mismatch',
@@ -794,14 +833,19 @@
             scope:      'field',
         })
         .done(function (resp) {
+            var steps = (resp.data && resp.data.steps) ? resp.data.steps : [];
             if (resp.success) {
                 $btn.closest('tr').addClass('fcrm-resolved').find('td:last-child').html(
                     '<span class="fcrm-resolved-badge">' + i18n.resolved + '</span>'
                 );
+                showStepLogUnderRow($row, steps, true);
             } else {
                 $btn.prop('disabled', false).text(direction === 'use_wp' ? 'Use WP' : 'Use FCRM');
-                var msg = (resp.data && resp.data.message) ? resp.data.message : i18n.error;
-                showNotice($resolveNotice, msg, 'error');
+                showStepLogUnderRow($row, steps, false);
+                if (!steps.length) {
+                    var msg = (resp.data && resp.data.message) ? resp.data.message : i18n.error;
+                    showNotice($resolveNotice, msg, 'error');
+                }
             }
         })
         .fail(function () {
@@ -829,11 +873,12 @@
             if (resp.success) {
                 $record.find('tr').addClass('fcrm-resolved');
                 $record.find('.fcrm-resolve-btn, .fcrm-resolve-all-btn').prop('disabled', true);
-                $record.find('tbody tr').each(function () {
+                $record.find('tbody tr.fcrm-mismatch-field-row').each(function () {
                     $(this).find('td:last-child').html(
                         '<span class="fcrm-resolved-badge">' + i18n.resolved + '</span>'
                     );
                 });
+                showNotice($resolveNotice, 'All fields resolved.', 'success');
             } else {
                 $btn.prop('disabled', false).text(direction === 'use_wp' ? 'Use all WP' : 'Use all FCRM');
                 var msg = (resp.data && resp.data.message) ? resp.data.message : i18n.error;
@@ -863,7 +908,7 @@
             if (resp.success) {
                 // Mark only the rows where one side was empty — leave true
                 // two-sided conflicts (both values present but different) intact.
-                $record.find('tbody tr').each(function () {
+                $record.find('tbody tr.fcrm-mismatch-field-row').each(function () {
                     var $row    = $(this);
                     var wpVal   = $.trim($row.find('.fcrm-val-wp').text());
                     var fcrmVal = $.trim($row.find('.fcrm-val-fcrm').text());
@@ -874,6 +919,7 @@
                     }
                 });
                 $btn.prop('disabled', true);
+                showNotice($resolveNotice, 'Empty fields synced.', 'success');
             } else {
                 $btn.prop('disabled', false).text('Sync All Empty');
                 var msg = (resp.data && resp.data.message) ? resp.data.message : i18n.error;

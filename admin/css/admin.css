@@ -283,6 +283,42 @@
     border-left: 3px solid #e65100;
 }
 
+/* Resolve step log -------------------------------------------------------- */
+.fcrm-resolve-log-row td {
+    padding: 0 !important;
+    border-bottom: none !important;
+}
+.fcrm-resolve-log {
+    background: #f6f7f7;
+    border-left: 3px solid #c3c4c7;
+    padding: 8px 12px;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    font-family: monospace;
+}
+.fcrm-resolve-step {
+    padding: 1px 0;
+}
+.fcrm-step-icon {
+    display: inline-block;
+    width: 16px;
+    text-align: center;
+    font-weight: 700;
+}
+.fcrm-step-ok { color: #2e7d32; }
+.fcrm-step-ok .fcrm-step-icon { color: #2e7d32; }
+.fcrm-step-warn { color: #7c6a0a; }
+.fcrm-step-warn .fcrm-step-icon { color: #b26d00; }
+.fcrm-step-error { color: #8b0000; }
+.fcrm-step-error .fcrm-step-icon { color: #d32f2f; }
+.fcrm-step-final {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid #ddd;
+    font-weight: 600;
+}
+
 /* Value-map sub-row ------------------------------------------------------- */
 .fcrm-value-map-row td {
     background: #f9f9fc;

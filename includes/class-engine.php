@@ -518,25 +518,30 @@ class FCRM_WP_Sync_Engine {
                 break;
 
             case 'acf':
-                if ( function_exists( 'update_field' ) ) {
-                    // ACF date pickers store dates internally in Ymd format
-                    // (e.g. "20190108").  Convert here so that the correct
-                    // value is persisted even when ACF's update_value filter
-                    // does not fire (field lookup can fail for user fields
-                    // during AJAX requests).
-                    if ( ( $mapping['field_type'] ?? 'text' ) === 'date' && $value !== '' && $value !== null ) {
-                        $canonical = $this->normalize_date( (string) $value, $mapping );
-                        if ( $canonical !== '' ) {
-                            $dt = \DateTime::createFromFormat( 'Y-m-d', $canonical );
-                            if ( $dt ) {
-                                $value = $dt->format( 'Ymd' );
-                            }
+                // ACF date pickers store dates internally in Ymd format
+                // (e.g. "20190108").  Convert before writing so that ACF's
+                // get_field() can parse the stored value correctly.
+                if ( ( $mapping['field_type'] ?? 'text' ) === 'date' && $value !== '' && $value !== null ) {
+                    $canonical = $this->normalize_date( (string) $value, $mapping );
+                    if ( $canonical !== '' ) {
+                        $dt = \DateTime::createFromFormat( 'Y-m-d', $canonical );
+                        if ( $dt ) {
+                            $value = $dt->format( 'Ymd' );
                         }
                     }
-                    update_field( $key, $value, 'user_' . $user_id );
-                } else {
-                    update_user_meta( $user_id, $key, $value );
                 }
+
+                // Write directly to user meta instead of using ACF's
+                // update_field() wrapper.  update_field() relies on ACF's
+                // field-group location rules to resolve the field object;
+                // those rules frequently fail to match in wp-admin AJAX
+                // requests for *user* fields, causing the write to silently
+                // produce no effect.  update_user_meta() bypasses that
+                // lookup entirely and is guaranteed to persist the value.
+                // ACF's get_field() will still read it correctly because the
+                // field-reference meta key (_<name> → field_xxx) already
+                // exists from the initial profile save.
+                update_user_meta( $user_id, $key, $value );
                 break;
 
             case 'meta':
@@ -658,6 +663,19 @@ class FCRM_WP_Sync_Engine {
         //    for d/m/Y values.  Steps 2-3 above should catch those cases.
         $ts = strtotime( $value );
         return $ts !== false ? date( 'Y-m-d', $ts ) : '';
+    }
+
+    /**
+     * Convenience: normalize only if the mapping is a date field.
+     * Used by the mismatch-resolver verification step to compare values
+     * that may be in different surface formats (Ymd vs Y-m-d vs m/d/Y).
+     */
+    public function normalize_date_if_date( string $value, array $mapping ): string {
+        if ( ( $mapping['field_type'] ?? 'text' ) === 'date' && $value !== '' ) {
+            $canonical = $this->normalize_date( $value, $mapping );
+            return $canonical !== '' ? $canonical : $value;
+        }
+        return $value;
     }
 
     /**

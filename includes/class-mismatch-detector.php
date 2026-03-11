@@ -307,7 +307,15 @@ class FCRM_WP_Sync_Mismatch_Detector {
      * @param string $direction   'use_wp' | 'use_fcrm'
      * @return bool
      */
-    public function resolve_field( int $user_id, string $mapping_id, string $direction ): bool {
+    /**
+     * Resolve a single field mismatch.
+     *
+     * Returns an array with 'ok' (bool) and 'steps' (log entries) so the
+     * AJAX handler can relay detailed progress to the admin UI.
+     *
+     * @return array{ ok: bool, steps: array<array{ text: string, status: string }> }
+     */
+    public function resolve_field( int $user_id, string $mapping_id, string $direction ): array {
         $mappings = $this->mapper->get_saved_mappings();
         $mapping  = null;
         foreach ( $mappings as $m ) {
@@ -317,12 +325,12 @@ class FCRM_WP_Sync_Mismatch_Detector {
             }
         }
         if ( ! $mapping ) {
-            return false;
+            return [ 'ok' => false, 'steps' => [ [ 'text' => 'Mapping not found.', 'status' => 'error' ] ] ];
         }
 
         $wp_user = get_userdata( $user_id );
         if ( ! $wp_user ) {
-            return false;
+            return [ 'ok' => false, 'steps' => [ [ 'text' => 'WordPress user not found.', 'status' => 'error' ] ] ];
         }
 
         // Activate sync guards so that the automatic hook-based sync does not
@@ -343,77 +351,120 @@ class FCRM_WP_Sync_Mismatch_Detector {
 
     /**
      * Internal implementation of single-field resolution (called inside sync guards).
+     *
+     * Returns an array with 'ok' (bool) and 'steps' (log messages) so the UI
+     * can show detailed progress to the admin.
+     *
+     * @return array{ ok: bool, steps: array<array{ text: string, status: string }> }
      */
-    private function do_resolve_field( int $user_id, \WP_User $wp_user, array $mapping, string $direction ): bool {
+    private function do_resolve_field( int $user_id, \WP_User $wp_user, array $mapping, string $direction ): array {
+        $steps = [];
+        $field_label = $mapping['wp_field_label'] ?? $mapping['wp_field_key'] ?? '?';
+
         if ( $direction === 'use_wp' ) {
-            // Push the WP value to FluentCRM.
+            // ------ Read WP value ------
             $raw   = $this->engine->get_wp_field_value( $user_id, $wp_user, $mapping );
+            $steps[] = [
+                'text'   => sprintf( 'Read WP value for "%s": %s', $field_label, $this->describe_value( $raw ) ),
+                'status' => ( $raw !== null && $raw !== '' ) ? 'ok' : 'warn',
+            ];
+
             $value = $this->engine->format_value(
                 $raw,
                 $mapping['field_type'] ?? 'text',
                 'to_fcrm',
                 $mapping
             );
+            $steps[] = [
+                'text'   => sprintf( 'Formatted for FluentCRM: %s', $this->describe_value( $value ) ),
+                'status' => 'ok',
+            ];
 
             $fcrm_key = $mapping['fcrm_field_key'];
 
-            // Find the subscriber to use their actual FCRM email as the
-            // createOrUpdate() lookup key.  Using the WP email here would cause
-            // createOrUpdate() to create a new duplicate contact whenever the WP
-            // email differs from the linked FluentCRM subscriber's email.
             $subscriber   = $this->find_subscriber_for_user( $wp_user );
             $lookup_email = $subscriber ? $subscriber->email : $wp_user->user_email;
 
+            if ( ! $subscriber ) {
+                $steps[] = [ 'text' => 'No linked FluentCRM subscriber found.', 'status' => 'error' ];
+                return [ 'ok' => false, 'steps' => $steps ];
+            }
+            $steps[] = [
+                'text'   => sprintf( 'Found FluentCRM contact: %s', $subscriber->email ),
+                'status' => 'ok',
+            ];
+
+            // ------ Write to FluentCRM ------
             if ( ( $mapping['fcrm_field_source'] ?? 'default' ) === 'custom' ) {
-                // Write custom field values directly on the subscriber model so
-                // the update is guaranteed to persist.  createOrUpdate() does not
-                // always propagate custom_values for existing contacts reliably.
-                if ( $subscriber ) {
-                    $existing = $subscriber->custom_fields();
-                    $existing[ $fcrm_key ] = $value;
-                    $subscriber->custom_fields = $existing;
-                    $subscriber->save();
-                } else {
-                    $data = [ 'email' => $lookup_email, 'custom_values' => [ $fcrm_key => $value ] ];
-                    FluentCrmApi( 'contacts' )->createOrUpdate( $data );
-                }
+                $existing = $subscriber->custom_fields();
+                $existing[ $fcrm_key ] = $value;
+                $subscriber->custom_fields = $existing;
+                $subscriber->save();
+                $steps[] = [ 'text' => 'Wrote custom field to FluentCRM subscriber.', 'status' => 'ok' ];
             } else {
-                // For the email field itself, update the subscriber model directly
-                // so createOrUpdate() can still find the contact by the existing
-                // (lookup) email rather than the new (WP) email.
                 if ( $fcrm_key === 'email' && $subscriber ) {
-                    // Guard against a UNIQUE constraint violation: if another
-                    // subscriber already owns the target email address (e.g. a
-                    // duplicate contact created before this fix), skip the update
-                    // rather than throwing a SQL duplicate-entry error.
                     $conflict = Subscriber::where( 'email', $value )
                         ->where( 'id', '!=', $subscriber->id )
                         ->first();
                     if ( $conflict instanceof Subscriber ) {
-                        return false;
+                        $steps[] = [ 'text' => sprintf( 'Email "%s" already used by another contact — skipped.', $value ), 'status' => 'error' ];
+                        return [ 'ok' => false, 'steps' => $steps ];
                     }
                     $subscriber->email = $value;
                     $subscriber->save();
-                    return true;
+                    $steps[] = [ 'text' => 'Updated subscriber email.', 'status' => 'ok' ];
+                    return [ 'ok' => true, 'steps' => $steps ];
                 }
                 $data = [ 'email' => $lookup_email, $fcrm_key => $value ];
                 FluentCrmApi( 'contacts' )->createOrUpdate( $data );
+                $steps[] = [ 'text' => 'Wrote standard field to FluentCRM.', 'status' => 'ok' ];
             }
-            return true;
+
+            // ------ Verify ------
+            $subscriber_fresh = Subscriber::where( 'id', $subscriber->id )->first();
+            if ( $subscriber_fresh instanceof Subscriber ) {
+                $fresh_custom = $subscriber_fresh->custom_fields();
+                $fcrm_src     = $mapping['fcrm_field_source'] ?? 'default';
+                $stored       = ( $fcrm_src === 'custom' )
+                    ? ( $fresh_custom[ $fcrm_key ] ?? null )
+                    : ( $subscriber_fresh->{ $fcrm_key } ?? null );
+                $match = ( (string) $stored === (string) $value );
+                $steps[] = [
+                    'text'   => $match
+                        ? sprintf( 'Verified: FluentCRM now stores %s', $this->describe_value( $stored ) )
+                        : sprintf( 'Verification FAILED — expected %s but found %s', $this->describe_value( $value ), $this->describe_value( $stored ) ),
+                    'status' => $match ? 'ok' : 'error',
+                ];
+                if ( ! $match ) {
+                    return [ 'ok' => false, 'steps' => $steps ];
+                }
+            }
+
+            return [ 'ok' => true, 'steps' => $steps ];
         }
 
         if ( $direction === 'use_fcrm' ) {
-            // Push the FCRM value to WP
+            // ------ Find subscriber ------
             $subscriber = $this->find_subscriber_for_user( $wp_user );
             if ( ! $subscriber ) {
-                return false;
+                $steps[] = [ 'text' => 'No linked FluentCRM subscriber found.', 'status' => 'error' ];
+                return [ 'ok' => false, 'steps' => $steps ];
             }
+            $steps[] = [
+                'text'   => sprintf( 'Found FluentCRM contact: %s', $subscriber->email ),
+                'status' => 'ok',
+            ];
 
-            $fcrm_key     = $mapping['fcrm_field_key'];
+            // ------ Read FCRM value ------
+            $fcrm_key      = $mapping['fcrm_field_key'];
             $custom_fields = $subscriber->custom_fields();
             $raw = ( ( $mapping['fcrm_field_source'] ?? 'default' ) === 'custom' )
                 ? ( $custom_fields[ $fcrm_key ] ?? null )
                 : ( $subscriber->{ $fcrm_key } ?? null );
+            $steps[] = [
+                'text'   => sprintf( 'Read FluentCRM value for "%s": %s', $field_label, $this->describe_value( $raw ) ),
+                'status' => ( $raw !== null && $raw !== '' ) ? 'ok' : 'warn',
+            ];
 
             $value = $this->engine->format_value(
                 $raw,
@@ -421,17 +472,54 @@ class FCRM_WP_Sync_Mismatch_Detector {
                 'to_wp',
                 $mapping
             );
+            $steps[] = [
+                'text'   => sprintf( 'Formatted for WordPress: %s', $this->describe_value( $value ) ),
+                'status' => 'ok',
+            ];
 
+            // ------ Write to WP ------
             $dummy_wp_user_data = [];
             $this->engine->set_wp_field_value( $user_id, $mapping, $value, $dummy_wp_user_data );
             if ( ! empty( $dummy_wp_user_data ) ) {
                 $dummy_wp_user_data['ID'] = $user_id;
                 wp_update_user( $dummy_wp_user_data );
+                $steps[] = [ 'text' => 'Updated WordPress user object field.', 'status' => 'ok' ];
+            } else {
+                $steps[] = [ 'text' => 'Wrote value to WordPress user meta.', 'status' => 'ok' ];
             }
-            return true;
+
+            // ------ Verify ------
+            $wp_user_fresh = get_userdata( $user_id );
+            $stored        = $this->engine->get_wp_field_value( $user_id, $wp_user_fresh, $mapping );
+            $stored_norm   = $this->engine->normalize_date_if_date( (string) ( $stored ?? '' ), $mapping );
+            $value_norm    = $this->engine->normalize_date_if_date( (string) $value, $mapping );
+            $match         = ( $stored_norm === $value_norm ) || ( (string) $stored === (string) $value );
+            $steps[] = [
+                'text'   => $match
+                    ? sprintf( 'Verified: WordPress now stores %s', $this->describe_value( $stored ) )
+                    : sprintf( 'Verification FAILED — expected %s but read back %s', $this->describe_value( $value ), $this->describe_value( $stored ) ),
+                'status' => $match ? 'ok' : 'error',
+            ];
+            if ( ! $match ) {
+                return [ 'ok' => false, 'steps' => $steps ];
+            }
+
+            return [ 'ok' => true, 'steps' => $steps ];
         }
 
-        return false;
+        $steps[] = [ 'text' => 'Unknown direction: ' . $direction, 'status' => 'error' ];
+        return [ 'ok' => false, 'steps' => $steps ];
+    }
+
+    /**
+     * Short human-readable description of a value for the resolve log.
+     */
+    private function describe_value( $val ): string {
+        if ( $val === null || $val === '' ) {
+            return '(empty)';
+        }
+        $str = is_array( $val ) ? wp_json_encode( $val ) : (string) $val;
+        return '"' . ( strlen( $str ) > 80 ? substr( $str, 0, 77 ) . '…' : $str ) . '"';
     }
 
     // -----------------------------------------------------------------------
